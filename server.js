@@ -1,60 +1,58 @@
-const express = require("express");
-const axios = require("axios");
-const cors = require("cors");
+import express from "express";
+import cors from "cors";
+import axios from "axios";
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
+
+const PORT = process.env.PORT || 3000;
 
 // ✅ TEST ROUTE
 app.get("/", (req, res) => {
   res.send("Backend running 🚀");
 });
 
-// ✅ AI ROUTE (GROQ - FAST + FREE)
+// ✅ AI ROUTE
 app.post("/ai", async (req, res) => {
   const { prompt } = req.body;
 
   try {
     const response = await axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
+      "https://api.openai.com/v1/chat/completions",
       {
-        model: "llama3-70b-8192",
+        model: "gpt-4o-mini",
         messages: [
           {
             role: "system",
             content:
-              "You are a viral content expert. Give trending Instagram reel hooks, captions and ideas.",
+              "You are a viral content expert. Give trending Instagram reel hooks, captions and ideas."
           },
           {
             role: "user",
-            content: prompt,
-          },
-        ],
+            content: prompt
+          }
+        ]
       },
       {
         headers: {
-          Authorization: " Bearer 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",
-          "Content-Type": "application/json",
-        },
+          Authorization: `Bearer ${process.env.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}`,
+          "Content-Type": "application/json"
+        }
       }
     );
 
     res.json({
-      result: response.data.choices[0].message.content,
+      result: response.data.choices[0].message.content
     });
 
   } catch (error) {
-    console.log(error.response?.data || error.message);
-    res.status(500).json({
-      error: "Something went wrong",
-    });
+    console.error(error.response?.data || error.message);
+    res.status(500).json({ error: "AI failed" });
   }
 });
 
-// ✅ SERVER START
-const PORT = 3000;
+// ✅ IMPORTANT (PORT LISTEN)
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log("Server running on port " + PORT);
 });
