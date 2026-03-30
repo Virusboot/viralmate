@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import axios from "axios";
 import crypto from "crypto";
-const { Resend } = require("resend");
+import { Resend } from "resend";
 
 // ─── ENV CHECK ─────────────────────────
 const REQUIRED_ENV = ["GROQ_API_KEY", "RESEND_API_KEY"];
@@ -45,7 +45,8 @@ async function sendOtpEmail(email, otp, purpose) {
           : "Verify Your Email OTP",
       html: `<h2>Your OTP is: ${otp}</h2>`,
     });
-    console.log("OTP sent");
+
+    console.log("OTP sent successfully");
   } catch (err) {
     console.error("Email error:", err);
     throw new Error("Email failed");
@@ -56,15 +57,16 @@ async function sendOtpEmail(email, otp, purpose) {
 
 // Health
 app.get("/", (req, res) => {
-  res.json({ status: "ok" });
+  res.json({ status: "ok", message: "Backend running 🚀" });
 });
 
 // Register
 app.post("/register", async (req, res) => {
   const { name, email, password } = req.body;
 
-  if (!email || !password || !name)
+  if (!name || !email || !password) {
     return res.status(400).json({ error: "All fields required" });
+  }
 
   const key = email.toLowerCase();
 
@@ -79,70 +81,81 @@ app.post("/register", async (req, res) => {
 
   try {
     await sendOtpEmail(key, otp, "verify");
-    res.json({ success: true, message: "OTP sent" });
+    return res.json({ success: true, message: "OTP sent" });
   } catch {
-    res.status(500).json({ error: "Email failed" });
+    return res.status(500).json({ error: "Email failed" });
   }
 });
 
 // Verify OTP
 app.post("/verify-otp", (req, res) => {
   const { email, otp } = req.body;
+
   const key = email.toLowerCase();
 
-  if (otpStore.get(key) !== otp)
+  if (otpStore.get(key) !== otp) {
     return res.status(400).json({ error: "Invalid OTP" });
+  }
 
   const user = userStore.get(key);
+  if (!user) return res.status(404).json({ error: "User not found" });
+
   user.verified = true;
 
-  res.json({ success: true });
+  return res.json({ success: true });
 });
 
 // Login
 app.post("/login", (req, res) => {
   const { email, password } = req.body;
-  const key = email.toLowerCase();
 
+  const key = email.toLowerCase();
   const user = userStore.get(key);
 
-  if (!user || user.password !== hashPassword(password))
+  if (!user || user.password !== hashPassword(password)) {
     return res.status(401).json({ error: "Invalid credentials" });
+  }
 
-  if (!user.verified)
+  if (!user.verified) {
     return res.status(403).json({ error: "Verify OTP first" });
+  }
 
-  res.json({ success: true });
+  return res.json({ success: true });
 });
 
 // Forgot Password
 app.post("/forgot-password", async (req, res) => {
   const { email } = req.body;
-  const key = email.toLowerCase();
 
+  const key = email.toLowerCase();
   const otp = generateOtp();
+
   otpStore.set(key + "_reset", otp);
 
   try {
     await sendOtpEmail(key, otp, "reset");
-    res.json({ success: true });
+    return res.json({ success: true });
   } catch {
-    res.status(500).json({ error: "Email failed" });
+    return res.status(500).json({ error: "Email failed" });
   }
 });
 
 // Reset Password
 app.post("/reset-password", (req, res) => {
   const { email, otp, newPassword } = req.body;
+
   const key = email.toLowerCase();
 
-  if (otpStore.get(key + "_reset") !== otp)
+  if (otpStore.get(key + "_reset") !== otp) {
     return res.status(400).json({ error: "Invalid OTP" });
+  }
 
   const user = userStore.get(key);
+  if (!user) return res.status(404).json({ error: "User not found" });
+
   user.password = hashPassword(newPassword);
 
-  res.json({ success: true });
+  return res.json({ success: true });
 });
 
 // AI
@@ -163,16 +176,17 @@ app.post("/ai", async (req, res) => {
       }
     );
 
-    res.json({
+    return res.json({
       result: response.data.choices[0].message.content,
     });
-  } catch (e) {
-    res.status(500).json({ error: "AI failed" });
+  } catch (err) {
+    console.error("AI error:", err.message);
+    return res.status(500).json({ error: "AI failed" });
   }
 });
 
 // ─── START ─────────────────────────────
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () =>
-  console.log(`🚀 Server running on port ${PORT}`)
-);
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
