@@ -4,34 +4,36 @@ import axios from "axios";
 import crypto from "crypto";
 import nodemailer from "nodemailer";
 
-// ─── Startup Checks (warn only, don't crash if email missing) ─────────────────
-if (!process.env.GROQ_API_KEY) {
-  console.error("❌ GROQ_API_KEY is not set. AI features will not work.");
+// ─── Startup Checks ───────────────────────────────────────────────────────────
+const REQUIRED_ENV = ["GROQ_API_KEY", "EMAIL_USER", "EMAIL_PASS"];
+for (const key of REQUIRED_ENV) {
+  if (!process.env[key]) {
+    console.error(`❌ ${key} is not set. Exiting.`);
+    process.exit(1);
+  }
 }
 
+// Facebook OAuth optional (warn only)
 if (!process.env.FACEBOOK_APP_ID || !process.env.FACEBOOK_APP_SECRET) {
   console.warn("⚠️  FACEBOOK_APP_ID / FACEBOOK_APP_SECRET not set. Facebook login will be disabled.");
-}
-
-const emailEnabled = !!(process.env.EMAIL_USER && process.env.EMAIL_PASS);
-if (!emailEnabled) {
-  console.warn("⚠️  EMAIL_USER / EMAIL_PASS not set. Email/OTP features will be disabled.");
 }
 
 const app = express();
 
 // ─── Middleware ────────────────────────────────────────────────────────────────
 app.use(cors({
-  origin: "*",
+  origin: "*", // Production mein apna domain dalo
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 app.use(express.json({ limit: "10kb" }));
 
-// ─── In-Memory Stores ─────────────────────────────────────────────────────────
+// ─── In-Memory Stores (Production mein Redis ya DB use karein) ────────────────
+// { email -> { hash, expiresAt, purpose } }
 const otpStore = new Map();
+// { email -> { name, hashedPassword, verified } }
 const userStore = new Map();
-
+// Pre-seed demo user
 userStore.set("user@viralmate.com", {
   name: "Harsh Bhardwaj",
   hashedPassword: hashPassword("secret123"),
@@ -52,35 +54,16 @@ function isValidEmail(email) {
   return /^[\w-.]+@([\w-]+\.)+[\w-]{2,4}$/.test(email);
 }
 
-// ─── Nodemailer (only if configured) ─────────────────────────────────────────
-let transporter = null;
-if (emailEnabled) {
-  transporter = nodemailer.createTransport({
-    service: process.env.EMAIL_SERVICE || "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
-  });
-
-  transporter.verify((error) => {
-    if (error) {
-      console.warn("⚠️  Email connection failed:", error.message);
-      console.warn("    Check EMAIL_USER and EMAIL_PASS (use Gmail App Password!)");
-    } else {
-      console.log("✅ Email service connected");
-    }
-  });
-}
+// ─── Nodemailer Transporter ───────────────────────────────────────────────────
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS, // Gmail App Password
+  },
+});
 
 async function sendOtpEmail(toEmail, otp, purpose) {
-  if (!transporter) {
-    throw new Error("Email service not configured");
-  }
-
   const isReset = purpose === "reset";
   const subject = isReset
     ? "ViralMate - Password Reset OTP"
@@ -121,15 +104,7 @@ async function sendOtpEmail(toEmail, otp, purpose) {
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "ViralMate Backend running 🚀",
-    services: {
-      ai: !!process.env.GROQ_API_KEY,
-      email: emailEnabled,
-      facebook: !!(process.env.FACEBOOK_APP_ID && process.env.FACEBOOK_APP_SECRET),
-    },
-  });
+  res.json({ status: "ok", message: "ViralMate Backend running 🚀" });
 });
 
 // ─── Login ────────────────────────────────────────────────────────────────────
@@ -141,7 +116,9 @@ app.post("/login", async (req, res) => {
   }
 
   const key = email.trim().toLowerCase();
-  if (!isValidEmail(key)) return res.status(400).json({ error: "Valid email daalein." });
+  if (!isValidEmail(key)) {
+    return res.status(400).json({ error: "Valid email daalein." });
+  }
 
   const user = userStore.get(key);
   if (!user || user.hashedPassword !== hashPassword(password)) {
@@ -178,29 +155,27 @@ app.post("/register", async (req, res) => {
     return res.status(409).json({ error: "Yeh email pehle se registered hai." });
   }
 
+  // Save user (unverified)
   userStore.set(key, {
     name: trimName,
     hashedPassword: hashPassword(password),
-    verified: !emailEnabled, // if no email, auto-verify
+    verified: false,
     plan: "free",
   });
 
-  if (!emailEnabled) {
-    return res.status(200).json({ success: true, message: "Account ban gaya! Ab login karein.", autoVerified: true });
-  }
-
+  // Generate & send OTP
   const otp = generateOtp();
-  otpStore.set(`${key}:verify`, { otp, expiresAt: Date.now() + 10 * 60 * 1000 });
+  otpStore.set(`${key}:verify`, {
+    otp,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+  });
 
   try {
     await sendOtpEmail(key, otp, "verify");
     return res.status(200).json({ success: true, message: "OTP bhej diya gaya. Email check karein." });
   } catch (err) {
     console.error("Email send error:", err.message);
-    // Auto-verify if email fails so user isn't stuck
-    const u = userStore.get(key);
-    if (u) userStore.set(key, { ...u, verified: true });
-    return res.status(200).json({ success: true, message: "Account ban gaya! Email service temporarily unavailable, auto-verified.", autoVerified: true });
+    return res.status(500).json({ error: "OTP email bhejne mein problem aayi. Admin se contact karein." });
   }
 });
 
@@ -208,7 +183,8 @@ app.post("/register", async (req, res) => {
 app.post("/verify-otp", async (req, res) => {
   const { email, otp, purpose } = req.body;
 
-  if (!email || !otp || !purpose) {
+  if (!email || !otp || !purpose ||
+      typeof email !== "string" || typeof otp !== "string" || typeof purpose !== "string") {
     return res.status(400).json({ error: "Email, OTP aur purpose zaroori hain." });
   }
 
@@ -225,6 +201,7 @@ app.post("/verify-otp", async (req, res) => {
     return res.status(400).json({ error: "Galat OTP. Dobara check karein." });
   }
 
+  // OTP valid!
   if (purpose === "verify") {
     const user = userStore.get(key);
     if (user) userStore.set(key, { ...user, verified: true });
@@ -233,6 +210,7 @@ app.post("/verify-otp", async (req, res) => {
   }
 
   if (purpose === "reset") {
+    // Keep OTP in store for reset-password step (mark as verified)
     otpStore.set(storeKey, { ...record, verified: true });
     return res.status(200).json({ success: true, message: "OTP verified. Ab naya password set karein." });
   }
@@ -240,46 +218,60 @@ app.post("/verify-otp", async (req, res) => {
   return res.status(400).json({ error: "Invalid purpose." });
 });
 
-// ─── Forgot Password ──────────────────────────────────────────────────────────
+// ─── Forgot Password (send OTP) ───────────────────────────────────────────────
 app.post("/forgot-password", async (req, res) => {
   const { email } = req.body;
-  if (!email || typeof email !== "string") return res.status(400).json({ error: "Email zaroori hai." });
+
+  if (!email || typeof email !== "string") {
+    return res.status(400).json({ error: "Email zaroori hai." });
+  }
 
   const key = email.trim().toLowerCase();
   if (!isValidEmail(key)) return res.status(400).json({ error: "Valid email daalein." });
 
+  // Always return success to prevent email enumeration
   if (!userStore.has(key)) {
     return res.status(200).json({ success: true, message: "Agar email registered hai toh OTP bhej diya jayega." });
   }
 
-  if (!emailEnabled) {
-    return res.status(503).json({ error: "Email service configure nahi hai. Admin se contact karein." });
-  }
-
   const otp = generateOtp();
-  otpStore.set(`${key}:reset`, { otp, expiresAt: Date.now() + 10 * 60 * 1000, verified: false });
+  otpStore.set(`${key}:reset`, {
+    otp,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+    verified: false,
+  });
 
   try {
     await sendOtpEmail(key, otp, "reset");
     return res.status(200).json({ success: true, message: "OTP bhej diya gaya. Email check karein." });
   } catch (err) {
     console.error("Email send error:", err.message);
-    return res.status(500).json({ error: "OTP email nahi bheji ja saki. Gmail App Password check karein." });
+    return res.status(500).json({ error: "OTP email bhejne mein problem aayi. Dobara try karein." });
   }
 });
 
 // ─── Reset Password ───────────────────────────────────────────────────────────
 app.post("/reset-password", async (req, res) => {
   const { email, otp, newPassword } = req.body;
-  if (!email || !otp || !newPassword) return res.status(400).json({ error: "Email, OTP aur new password zaroori hain." });
+
+  if (!email || !otp || !newPassword ||
+      typeof email !== "string" || typeof otp !== "string" || typeof newPassword !== "string") {
+    return res.status(400).json({ error: "Email, OTP aur new password zaroori hain." });
+  }
 
   const key = email.trim().toLowerCase();
   const storeKey = `${key}:reset`;
   const record = otpStore.get(storeKey);
 
-  if (!record || !record.verified) return res.status(400).json({ error: "OTP verify karo pehle." });
-  if (record.otp !== otp.trim()) return res.status(400).json({ error: "Invalid OTP." });
-  if (newPassword.length < 6) return res.status(400).json({ error: "Password kam se kam 6 characters ka hona chahiye." });
+  if (!record || !record.verified) {
+    return res.status(400).json({ error: "OTP verify karo pehle." });
+  }
+  if (record.otp !== otp.trim()) {
+    return res.status(400).json({ error: "Invalid OTP." });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: "Password kam se kam 6 characters ka hona chahiye." });
+  }
 
   const user = userStore.get(key);
   if (!user) return res.status(404).json({ error: "User nahi mila." });
@@ -293,22 +285,27 @@ app.post("/reset-password", async (req, res) => {
 // ─── Resend OTP ───────────────────────────────────────────────────────────────
 app.post("/resend-otp", async (req, res) => {
   const { email, purpose } = req.body;
-  if (!email || !purpose) return res.status(400).json({ error: "Email aur purpose zaroori hain." });
+
+  if (!email || !purpose || typeof email !== "string" || typeof purpose !== "string") {
+    return res.status(400).json({ error: "Email aur purpose zaroori hain." });
+  }
 
   const key = email.trim().toLowerCase();
   if (!isValidEmail(key)) return res.status(400).json({ error: "Valid email daalein." });
 
-  if (!emailEnabled) return res.status(503).json({ error: "Email service configure nahi hai." });
-
   const otp = generateOtp();
-  otpStore.set(`${key}:${purpose}`, { otp, expiresAt: Date.now() + 10 * 60 * 1000, verified: false });
+  otpStore.set(`${key}:${purpose}`, {
+    otp,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+    verified: false,
+  });
 
   try {
     await sendOtpEmail(key, otp, purpose);
     return res.status(200).json({ success: true, message: "OTP dobara bhej diya gaya." });
   } catch (err) {
     console.error("Resend error:", err.message);
-    return res.status(500).json({ error: "OTP nahi bheji ja saki. Dobara try karein." });
+    return res.status(500).json({ error: "OTP email nahi bheji ja saki. Dobara try karein." });
   }
 });
 
@@ -317,27 +314,40 @@ app.post("/auth/facebook", (req, res) => {
   if (!process.env.FACEBOOK_APP_ID || !process.env.FACEBOOK_APP_SECRET) {
     return res.status(503).json({ error: "Facebook login is not configured." });
   }
+
   const redirectUri = encodeURIComponent(
-    process.env.FACEBOOK_REDIRECT_URI ||
-    `${process.env.BACKEND_URL || "https://viralmate-production.up.railway.app"}/auth/facebook/callback`
+    process.env.FACEBOOK_REDIRECT_URI || `${process.env.BACKEND_URL || "https://viralmate-production.up.railway.app"}/auth/facebook/callback`
   );
   const loginUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${redirectUri}&scope=email,public_profile&response_type=code`;
+
   return res.status(200).json({ success: true, loginUrl });
 });
 
+// Facebook callback (browser redirect karenge yahan)
 app.get("/auth/facebook/callback", async (req, res) => {
   const { code, error } = req.query;
-  if (error || !code) return res.redirect("/?fb_error=access_denied");
+
+  if (error || !code) {
+    return res.redirect("/?fb_error=access_denied");
+  }
 
   try {
     const redirectUri = process.env.FACEBOOK_REDIRECT_URI ||
       `${process.env.BACKEND_URL || "https://viralmate-production.up.railway.app"}/auth/facebook/callback`;
 
+    // Exchange code for access token
     const tokenRes = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", {
-      params: { client_id: process.env.FACEBOOK_APP_ID, client_secret: process.env.FACEBOOK_APP_SECRET, redirect_uri: redirectUri, code },
+      params: {
+        client_id: process.env.FACEBOOK_APP_ID,
+        client_secret: process.env.FACEBOOK_APP_SECRET,
+        redirect_uri: redirectUri,
+        code,
+      },
     });
 
     const accessToken = tokenRes.data.access_token;
+
+    // Get user info
     const userRes = await axios.get("https://graph.facebook.com/me", {
       params: { fields: "id,name,email", access_token: accessToken },
     });
@@ -346,6 +356,7 @@ app.get("/auth/facebook/callback", async (req, res) => {
     const email = fbUser.email || `fb_${fbUser.id}@viralmate.com`;
     const key = email.toLowerCase();
 
+    // Create or update user
     if (!userStore.has(key)) {
       userStore.set(key, {
         name: fbUser.name,
@@ -358,7 +369,13 @@ app.get("/auth/facebook/callback", async (req, res) => {
 
     const token = "jwt-fb-" + crypto.randomBytes(16).toString("hex");
     const user = userStore.get(key);
-    return res.json({ success: true, token, user: { name: user.name, email: key, plan: user.plan } });
+
+    // In production: redirect to deep link or Flutter WebView with token
+    return res.json({
+      success: true,
+      token,
+      user: { name: user.name, email: key, plan: user.plan },
+    });
   } catch (err) {
     console.error("Facebook callback error:", err.response?.data || err.message);
     return res.status(500).json({ error: "Facebook login failed. Dobara try karein." });
@@ -367,11 +384,8 @@ app.get("/auth/facebook/callback", async (req, res) => {
 
 // ─── AI Generation ─────────────────────────────────────────────────────────────
 app.post("/ai", async (req, res) => {
-  if (!process.env.GROQ_API_KEY) {
-    return res.status(503).json({ error: "AI service configure nahi hai. GROQ_API_KEY set karein." });
-  }
-
   const { prompt } = req.body;
+
   if (!prompt || typeof prompt !== "string" || prompt.trim() === "") {
     return res.status(400).json({ error: "Prompt required aur non-empty hona chahiye." });
   }
@@ -383,7 +397,7 @@ app.post("/ai", async (req, res) => {
     const response = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama3-70b-8192",
+        model: "llama-3.3-70b-versatile",
         messages: [
           {
             role: "system",
@@ -403,13 +417,14 @@ app.post("/ai", async (req, res) => {
       }
     );
 
-    return res.status(200).json({ result: response.data.choices[0].message.content });
+    const result = response.data.choices[0].message.content;
+    return res.status(200).json({ result });
   } catch (error) {
     console.error("Groq API Error:", error.response?.data || error.message);
     if (error.code === "ECONNABORTED") return res.status(504).json({ error: "AI response timeout. Dobara try karo." });
-    if (error.response?.status === 401) return res.status(500).json({ error: "AI authentication failed. GROQ_API_KEY check karo." });
+    if (error.response?.status === 401) return res.status(500).json({ error: "AI authentication failed." });
     if (error.response?.status === 429) return res.status(429).json({ error: "Too many requests. Thodi der baad try karo." });
-    return res.status(500).json({ error: error.response?.data?.error?.message || "AI service temporarily unavailable." });
+    return res.status(500).json({ error: error.response?.data?.error?.message || "AI service unavailable." });
   }
 });
 
