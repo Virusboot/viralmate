@@ -6,6 +6,7 @@ import { Resend } from "resend";
 
 // ─── ENV CHECK ─────────────────────────
 const REQUIRED_ENV = ["GROQ_API_KEY", "RESEND_API_KEY"];
+
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
     console.error(`❌ ${key} is not set. Exiting.`);
@@ -33,22 +34,33 @@ function generateOtp() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// ─── EMAIL (RESEND) ────────────────────
+// ─── EMAIL (RESEND FIXED) ──────────────
 async function sendOtpEmail(email, otp, purpose) {
   try {
-    await resend.emails.send({
-      from: "onboarding@resend.dev",
-      to: email,
+    const response = await resend.emails.send({
+      from: "ViralMate <onboarding@resend.dev>", // 🔥 important
+      to: [email], // 🔥 array me bhejna better hai
       subject:
         purpose === "reset"
           ? "Password Reset OTP"
           : "Verify Your Email OTP",
-      html: `<h2>Your OTP is: ${otp}</h2>`,
+      html: `
+        <div style="font-family:sans-serif">
+          <h2>Your OTP is:</h2>
+          <h1>${otp}</h1>
+          <p>This OTP will expire in 5 minutes.</p>
+        </div>
+      `,
     });
 
-    console.log("OTP sent successfully");
+    console.log("✅ OTP sent:", response);
+
+    if (!response || response.error) {
+      throw new Error("Resend failed");
+    }
+
   } catch (err) {
-    console.error("Email error:", err);
+    console.error("❌ Email FULL error:", err);
     throw new Error("Email failed");
   }
 }
@@ -101,6 +113,7 @@ app.post("/verify-otp", (req, res) => {
   if (!user) return res.status(404).json({ error: "User not found" });
 
   user.verified = true;
+  otpStore.delete(key);
 
   return res.json({ success: true });
 });
@@ -154,6 +167,7 @@ app.post("/reset-password", (req, res) => {
   if (!user) return res.status(404).json({ error: "User not found" });
 
   user.password = hashPassword(newPassword);
+  otpStore.delete(key + "_reset");
 
   return res.json({ success: true });
 });
@@ -187,6 +201,7 @@ app.post("/ai", async (req, res) => {
 
 // ─── START ─────────────────────────────
 const PORT = process.env.PORT || 8080;
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
