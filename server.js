@@ -566,6 +566,51 @@ app.post("/ai", async (req, res) => {
   }
 });
 
+// ── USER DATA DELETION (Facebook requirement) ─────────────────────────────────
+// Facebook requires this URL when going Live
+// GET /delete — shows data deletion instructions page
+app.get("/delete", (_, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>ViralMate — Data Deletion</title>
+      <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 60px auto; padding: 20px; color: #333; }
+        h1 { color: #6366F1; }
+        .step { background: #f5f5ff; border-left: 4px solid #6366F1; padding: 12px 16px; margin: 12px 0; border-radius: 4px; }
+        a { color: #6366F1; }
+      </style>
+    </head>
+    <body>
+      <h1>ViralMate — Data Deletion Instructions</h1>
+      <p>To request deletion of your data from ViralMate, follow these steps:</p>
+      <div class="step"><strong>Step 1:</strong> Open the ViralMate app on your device.</div>
+      <div class="step"><strong>Step 2:</strong> Go to <strong>Profile → Settings → Delete Account</strong>.</div>
+      <div class="step"><strong>Step 3:</strong> Confirm deletion. All your data will be permanently removed within 30 days.</div>
+      <p>Or email us at: <a href="mailto:support@viralmate.com">support@viralmate.com</a> with subject <strong>"Delete My Data"</strong>.</p>
+      <p style="color:#999;font-size:13px;margin-top:40px;">ViralMate does not sell your data to third parties.</p>
+    </body>
+    </html>
+  `);
+});
+
+// POST /delete-account — actual account deletion endpoint
+app.post("/delete-account", (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: "Email required." });
+  const key = email.trim().toLowerCase();
+  if (userStore.has(key)) {
+    userStore.delete(key);
+    // Delete all social connections
+    for (const p of ["instagram", "facebook", "youtube"]) {
+      socialStore.delete(`${key}:${p}`);
+    }
+  }
+  return res.json({ success: true, message: "Account and all data deleted successfully." });
+});
+
 // ── 404 & GLOBAL ERROR HANDLER ────────────────────────────────────────────────
 app.use((_, res) => res.status(404).json({ error: "Route not found." }));
 app.use((err, _, res, _next) => {
