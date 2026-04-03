@@ -543,7 +543,21 @@ app.post("/ai", async (req, res) => {
         messages: [
           {
             role: "system",
-            content: "You are ViralMate, an expert social media content creator specializing in viral content for Instagram, YouTube Shorts, and Facebook. Be creative, engaging, and practical. Respond in the same language as the user's message.",
+            content: `You are ViralMate — India's #1 AI viral content strategist.
+You specialize in creating explosive, scroll-stopping content for Instagram Reels, YouTube Shorts, and Facebook.
+Your outputs are NEVER generic. They are:
+• Trend-aware: You know what's viral RIGHT NOW in India
+• Hook-first: Every response starts with something that stops the scroll  
+• Structured beautifully: Use numbered lists, emojis, clear sections — never plain walls of text
+• Actionable: Include hooks, captions, hashtags, posting tips
+• Bilingual-smart: Mix Hindi+English (Hinglish) naturally when the user writes in Hindi/Hinglish
+• Platform-specific: Different formats for Reels vs Shorts vs Facebook
+
+When generating hooks: make them SHOCKING, CURIOSITY-DRIVEN, or EMOTIONALLY TRIGGERING.
+When generating captions: Start with a 1-line hook, tell a micro-story, end with CTA.
+When generating hashtags: Mix 5 niche + 5 medium + 5 broad tags for maximum reach.
+Always format responses with clear sections, emojis as visual anchors, and numbered lists.
+Respond in the same language as the user's message.`,
           },
           { role: "user", content: prompt.trim() },
         ],
@@ -670,6 +684,167 @@ app.get("/privacy", (_, res) => {
   <p><a href="mailto:support@viralmate.com">support@viralmate.com</a></p>
   </body></html>`);
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TRENDING — Real trending reels & shorts via Groq AI
+// POST /trending — returns 10 trending content ideas with captions + hashtags
+// ─────────────────────────────────────────────────────────────────────────────
+app.post("/trending", async (req, res) => {
+  const { platforms = ["instagram", "youtube"], niche = "general", userId } = req.body;
+
+  // Build context from user's connected accounts
+  const connectedPlatforms = [];
+  if (userId) {
+    for (const p of ["instagram", "facebook", "youtube"]) {
+      const d = socialStore.get(`${userId}:${p}`);
+      if (d) connectedPlatforms.push({ platform: p, handle: d.handle, accountName: d.accountName });
+    }
+  }
+
+  const platformText = platforms.includes("youtube") && platforms.includes("instagram")
+    ? "Instagram Reels AND YouTube Shorts"
+    : platforms.includes("youtube") ? "YouTube Shorts" : "Instagram Reels";
+
+  const nicheContext = niche && niche !== "general"
+    ? `The creator's niche is: ${niche}.`
+    : "The creator makes general lifestyle/entertainment content.";
+
+  const systemPrompt = `You are ViralMate, the world's #1 viral content strategist for Indian social media creators.
+You have deep knowledge of what's trending RIGHT NOW on Instagram Reels and YouTube Shorts in India.
+You understand viral patterns, hook psychology, and what makes content blow up.
+Always respond in JSON only. No extra text before or after JSON.`;
+
+  const userPrompt = `Give me exactly 10 trending content ideas for ${platformText} that are going viral RIGHT NOW.
+${nicheContext}
+${connectedPlatforms.length > 0 ? `Creator's accounts: ${connectedPlatforms.map(c => `${c.platform}: ${c.accountName || c.handle}`).join(", ")}` : ""}
+
+For each idea return this exact JSON structure:
+{
+  "ideas": [
+    {
+      "rank": 1,
+      "title": "Catchy video title/concept (under 60 chars)",
+      "hook": "First 3 seconds hook line that stops scrolling — powerful, curiosity-driven",
+      "whyViral": "1 line: exactly why this is blowing up right now",
+      "caption": "Full engaging caption with emojis, storytelling hook, call-to-action (150-200 chars)",
+      "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4", "#tag5", "#tag6", "#tag7", "#tag8", "#tag9", "#tag10"],
+      "platform": "instagram" or "youtube" or "both",
+      "contentType": "reel" or "short" or "carousel",
+      "trendScore": 95,
+      "niche": "lifestyle",
+      "tips": ["Tip 1 to make this viral", "Tip 2 about timing/editing"]
+    }
+  ]
+}
+
+Make them highly specific, creative, and currently trending in India 2025. Mix Hindi+English naturally.`;
+
+  try {
+    const r = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 3000,
+        temperature: 0.85,
+        response_format: { type: "json_object" },
+      },
+      {
+        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+        timeout: 40000,
+      }
+    );
+
+    let ideas;
+    try {
+      const raw = r.data.choices[0].message.content;
+      const parsed = JSON.parse(raw);
+      ideas = parsed.ideas || parsed;
+    } catch (_) {
+      return res.status(500).json({ error: "Could not parse AI response. Try again." });
+    }
+
+    return res.json({ success: true, ideas, generatedAt: new Date().toISOString() });
+
+  } catch (err) {
+    console.error("Trending error:", err.response?.data || err.message);
+    if (err.code === "ECONNABORTED")   return res.status(504).json({ error: "Request timed out. Please try again." });
+    if (err.response?.status === 429) return res.status(429).json({ error: "Too many requests. Wait a moment." });
+    return res.status(500).json({ error: "Could not fetch trending ideas. Please try again." });
+  }
+});
+
+// POST /ai/caption — Enhanced caption generator with style, platform awareness
+app.post("/ai/caption", async (req, res) => {
+  const { topic, platform = "instagram", style = "engaging", language = "hinglish" } = req.body;
+  if (!topic) return res.status(400).json({ error: "Topic is required." });
+
+  const styleGuide = {
+    engaging: "conversational, relatable, uses storytelling",
+    professional: "polished, authoritative, brand-focused",
+    funny: "humorous, witty, meme-worthy",
+    motivational: "inspiring, emotional, empowering",
+    educational: "informative, value-packed, teaching",
+  }[style] || "engaging and conversational";
+
+  const langGuide = language === "hindi" ? "pure Hindi (Devanagari)"
+    : language === "english" ? "pure English"
+    : "Hinglish (mix of Hindi and English naturally, very Indian)";
+
+  const prompt = `Write 3 viral ${platform} captions for this topic: "${topic}"
+Style: ${styleGuide}
+Language: ${langGuide}
+Each caption must:
+- Start with a scroll-stopping hook (first line is EVERYTHING)
+- Use 3-5 strategic emojis (not random spam)
+- Have a clear CTA at the end
+- Be 150-220 characters
+- Feel authentic, not AI-generated
+- Include platform-specific best practices
+
+Also give 15 best hashtags for maximum reach.
+
+Respond in JSON:
+{
+  "captions": [
+    {"text": "full caption here", "style": "style name", "hookType": "question/statement/story/shock"},
+    {"text": "...", "style": "...", "hookType": "..."},
+    {"text": "...", "style": "...", "hookType": "..."}
+  ],
+  "hashtags": ["#tag1", ...15 tags],
+  "bestTime": "Best time to post for maximum reach",
+  "tip": "One key tip to boost engagement on this post"
+}`;
+
+  try {
+    const r = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          { role: "system", content: "You are ViralMate, expert viral content strategist. Return only valid JSON." },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: 1500,
+        temperature: 0.9,
+        response_format: { type: "json_object" },
+      },
+      {
+        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+        timeout: 25000,
+      }
+    );
+    const data = JSON.parse(r.data.choices[0].message.content);
+    return res.json({ success: true, ...data });
+  } catch (err) {
+    return res.status(500).json({ error: "Caption generation failed. Try again." });
+  }
+});
+
 
 // ── 404 & GLOBAL ERROR HANDLER ────────────────────────────────────────────────
 app.use((_, res) => res.status(404).json({ error: "Route not found." }));
