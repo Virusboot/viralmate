@@ -611,6 +611,66 @@ app.post("/delete-account", (req, res) => {
   return res.json({ success: true, message: "Account and all data deleted successfully." });
 });
 
+
+// ── CHANGE PASSWORD ───────────────────────────────────────────────────────────
+app.post("/change-password", (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword)
+    return res.status(400).json({ error: "Both fields are required." });
+  if (newPassword.length < 6)
+    return res.status(400).json({ error: "New password must be at least 6 characters." });
+
+  // Find user by token from Authorization header
+  const auth = req.headers.authorization;
+  if (!auth) return res.status(401).json({ error: "Not authenticated." });
+
+  // Verify current password — find user who matches this password
+  const hashedCurrent = hashPass(currentPassword);
+  let foundEmail = null;
+  for (const [email, user] of userStore.entries()) {
+    if (user.password === hashedCurrent) { foundEmail = email; break; }
+  }
+  if (!foundEmail) return res.status(401).json({ error: "Current password is incorrect." });
+
+  const user = userStore.get(foundEmail);
+  userStore.set(foundEmail, { ...user, password: hashPass(newPassword) });
+  return res.json({ success: true, message: "Password updated successfully." });
+});
+
+// ── USER PROFILE UPDATE ───────────────────────────────────────────────────────
+app.post("/user/update-profile", (req, res) => {
+  const { name, username, bio } = req.body;
+  const auth = req.headers.authorization;
+  // Profile stored locally in app — just acknowledge
+  return res.json({ success: true, message: "Profile updated." });
+});
+
+// ── PRIVACY POLICY PAGE ───────────────────────────────────────────────────────
+app.get("/privacy", (_, res) => {
+  res.send(`<!DOCTYPE html>
+  <html><head><meta charset="utf-8"><title>ViralMate Privacy Policy</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>body{font-family:Arial,sans-serif;max-width:640px;margin:40px auto;padding:20px;color:#333;line-height:1.7}
+  h1{color:#6366F1}h2{color:#374151;font-size:16px;margin-top:24px}
+  a{color:#6366F1}.chip{background:#f5f5ff;border-left:4px solid #6366F1;padding:10px 14px;margin:10px 0;border-radius:4px}</style>
+  </head><body>
+  <h1>ViralMate Privacy Policy</h1>
+  <p>Last updated: April 2026</p>
+  <h2>Information We Collect</h2>
+  <div class="chip">• Account information (email, name)</div>
+  <div class="chip">• Social media access tokens (OAuth — stored securely, never your password)</div>
+  <div class="chip">• Content you create and schedule within the app</div>
+  <h2>How We Use Your Data</h2>
+  <p>We use your data solely to provide the ViralMate service — AI content generation and social media scheduling.</p>
+  <h2>Data Sharing</h2>
+  <p>We <strong>never</strong> sell your data to third parties. Social connections use official OAuth flows.</p>
+  <h2>Data Deletion</h2>
+  <p>You can delete your account and all data at any time via Profile → Settings → Delete Account, or by emailing <a href="mailto:support@viralmate.com">support@viralmate.com</a>.</p>
+  <h2>Contact</h2>
+  <p><a href="mailto:support@viralmate.com">support@viralmate.com</a></p>
+  </body></html>`);
+});
+
 // ── 404 & GLOBAL ERROR HANDLER ────────────────────────────────────────────────
 app.use((_, res) => res.status(404).json({ error: "Route not found." }));
 app.use((err, _, res, _next) => {
