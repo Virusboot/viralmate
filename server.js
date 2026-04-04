@@ -630,6 +630,13 @@ Respond in the same language as the user's message.`,
     if (lastErr?.response?.status === 429)      return res.status(429).json({ error: "Too many requests. Please wait a moment." });
     if (lastErr?.response?.status === 401)      return res.status(500).json({ error: "GROQ_API_KEY is invalid or not set. Please update your Railway environment variables." });
     return res.status(500).json({ error: "AI service is unavailable. Please try again." });
+
+  } catch (err) {
+    console.error("AI Route Error:", err.message);
+    return res.status(500).json({
+      error: "Something went wrong in AI route."
+    });
+  }
 });
 
 // ── USER DATA DELETION (Facebook requirement) ─────────────────────────────────
