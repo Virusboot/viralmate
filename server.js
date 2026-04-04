@@ -751,7 +751,6 @@ Make them highly specific, creative, and currently trending in India 2025. Mix H
         ],
         max_tokens: 3000,
         temperature: 0.85,
-        response_format: { type: "json_object" },
       },
       {
         headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
@@ -762,9 +761,14 @@ Make them highly specific, creative, and currently trending in India 2025. Mix H
     let ideas;
     try {
       const raw = r.data.choices[0].message.content;
-      const parsed = JSON.parse(raw);
+      // Robust JSON extraction — strip markdown fences if present
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("No JSON found");
+      const parsed = JSON.parse(jsonMatch[0]);
       ideas = parsed.ideas || parsed;
-    } catch (_) {
+      if (!Array.isArray(ideas)) throw new Error("ideas is not array");
+    } catch (parseErr) {
+      console.error("Parse error:", parseErr.message);
       return res.status(500).json({ error: "Could not parse AI response. Try again." });
     }
 
@@ -831,20 +835,228 @@ Respond in JSON:
         ],
         max_tokens: 1500,
         temperature: 0.9,
-        response_format: { type: "json_object" },
       },
       {
         headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
         timeout: 25000,
       }
     );
-    const data = JSON.parse(r.data.choices[0].message.content);
+    const raw = r.data.choices[0].message.content;
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    const data = jsonMatch ? JSON.parse(jsonMatch[0]) : { captions: [], hashtags: [] };
     return res.json({ success: true, ...data });
   } catch (err) {
     return res.status(500).json({ error: "Caption generation failed. Try again." });
   }
 });
 
+
+
+// ── GOOGLE / FACEBOOK LOGIN ──────────────────────────────────────────────────
+// POST /auth/google — verify Google ID token and log user in
+app.post("/auth/google", async (req, res) => {
+  const { idToken } = req.body;
+  if (!idToken) return res.status(400).json({ error: "idToken is required." });
+
+  try {
+    // Verify with Google's tokeninfo endpoint
+    const r = await axios.get(`https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`, { timeout: 8000 });
+    const payload = r.data;
+
+    if (!payload.email) return res.status(401).json({ error: "Invalid Google token." });
+
+    const email = payload.email.toLowerCase();
+    const name  = payload.name || payload.email.split('@')[0];
+
+    // Auto-create account if not exists
+    if (!userStore.has(email)) {
+      userStore.set(email, { name, password: '', verified: true, plan: 'free', googleId: payload.sub });
+    } else {
+      const u = userStore.get(email);
+      userStore.set(email, { ...u, verified: true });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const userId = payload.sub || email;
+
+    return res.json({
+      success: true, token,
+      user: { name, email, plan: userStore.get(email)?.plan || 'free' },
+      userId,
+    });
+  } catch (err) {
+    console.error("Google login error:", err.response?.data || err.message);
+    return res.status(401).json({ error: "Google authentication failed. Please try again." });
+  }
+});
+
+// POST /auth/facebook — verify Facebook access token
+app.post("/auth/facebook", async (req, res) => {
+  const { accessToken } = req.body;
+  if (!accessToken) return res.status(400).json({ error: "accessToken is required." });
+
+  try {
+    const r = await axios.get(
+      `https://graph.facebook.com/me?fields=id,name,email&access_token=${accessToken}`,
+      { timeout: 8000 }
+    );
+    const profile = r.data;
+    const email = profile.email || `fb_${profile.id}@viralmate.app`;
+    const name  = profile.name || 'Facebook User';
+
+    if (!userStore.has(email)) {
+      userStore.set(email, { name, password: '', verified: true, plan: 'free', facebookId: profile.id });
+    } else {
+      const u = userStore.get(email);
+      userStore.set(email, { ...u, verified: true });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+
+    return res.json({
+      success: true, token,
+      user: { name, email, plan: userStore.get(email)?.plan || 'free' },
+      userId: profile.id,
+    });
+  } catch (err) {
+    console.error("Facebook login error:", err.response?.data || err.message);
+    return res.status(401).json({ error: "Facebook authentication failed. Please try again." });
+  }
+});
+
+
+// POST /auth/login-url — Generate OAuth URL for Google/Facebook LOGIN (not just social connect)
+// Used by login screen Google + Facebook buttons
+app.post("/auth/login-url", (req, res) => {
+  const { platform } = req.body;
+  if (!platform) return res.status(400).json({ error: "Platform is required." });
+
+  const state = genState();
+  oauthStates.set(state, { platform, userId: "login", createdAt: Date.now() });
+  setTimeout(() => oauthStates.delete(state), 600000);
+
+  let authUrl = "";
+
+  if (platform === "google") {
+    if (!process.env.YOUTUBE_CLIENT_ID) {
+      return res.status(503).json({
+        error: "Google login is not configured yet.",
+        setup: "Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET on Railway.",
+      });
+    }
+    const redirectUri = encodeURIComponent(`${BACKEND_URL}/auth/callback/google`);
+    const scope = encodeURIComponent("openid email profile");
+    authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${process.env.YOUTUBE_CLIENT_ID}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code&access_type=offline&prompt=consent`;
+
+  } else if (platform === "facebook") {
+    if (!process.env.FACEBOOK_APP_ID) {
+      return res.status(503).json({
+        error: "Facebook login is not configured yet.",
+        setup: "Set FACEBOOK_APP_ID and FACEBOOK_APP_SECRET on Railway.",
+      });
+    }
+    const redirectUri = encodeURIComponent(`${BACKEND_URL}/auth/callback/facebook`);
+    authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${redirectUri}&scope=email,public_profile&state=${state}&response_type=code`;
+  } else {
+    return res.status(400).json({ error: "Unsupported platform for login." });
+  }
+
+  return res.json({ success: true, authUrl });
+});
+
+// GET /auth/callback/google — handles Google login OAuth callback
+app.get("/auth/callback/google", async (req, res) => {
+  const { code, state, error } = req.query;
+  if (error || !code || !state)
+    return res.redirect(`${APP_SCHEME}://social-callback?error=access_denied&platform=google`);
+
+  const sd = oauthStates.get(state);
+  if (!sd) return res.redirect(`${APP_SCHEME}://social-callback?error=invalid_state&platform=google`);
+  oauthStates.delete(state);
+
+  try {
+    const tokenRes = await axios.post("https://oauth2.googleapis.com/token", {
+      code,
+      client_id: process.env.YOUTUBE_CLIENT_ID,
+      client_secret: process.env.YOUTUBE_CLIENT_SECRET,
+      redirect_uri: `${BACKEND_URL}/auth/callback/google`,
+      grant_type: "authorization_code",
+    }, { timeout: 10000 });
+
+    const { access_token } = tokenRes.data;
+
+    // Get Google profile
+    const profileRes = await axios.get("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${access_token}` },
+      timeout: 8000,
+    });
+
+    const { email, name, id } = profileRes.data;
+    const key = email.toLowerCase();
+
+    if (!userStore.has(key)) {
+      userStore.set(key, { name: name || email, password: "", verified: true, plan: "free" });
+    } else {
+      const u = userStore.get(key);
+      userStore.set(key, { ...u, verified: true });
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const params = new URLSearchParams({ success: "true", token, userId: key, platform: "google" });
+    return res.redirect(`${APP_SCHEME}://social-callback?${params.toString()}`);
+
+  } catch (err) {
+    console.error("Google login callback error:", err.response?.data || err.message);
+    return res.redirect(`${APP_SCHEME}://social-callback?error=server_error&platform=google`);
+  }
+});
+
+// GET /auth/callback/facebook — handles Facebook login OAuth callback
+app.get("/auth/callback/facebook", async (req, res) => {
+  const { code, state, error } = req.query;
+  if (error || !code || !state)
+    return res.redirect(`${APP_SCHEME}://social-callback?error=access_denied&platform=facebook`);
+
+  const sd = oauthStates.get(state);
+  if (!sd) return res.redirect(`${APP_SCHEME}://social-callback?error=invalid_state&platform=facebook`);
+  oauthStates.delete(state);
+
+  try {
+    const tokenRes = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", {
+      params: {
+        client_id: process.env.FACEBOOK_APP_ID,
+        client_secret: process.env.FACEBOOK_APP_SECRET,
+        redirect_uri: `${BACKEND_URL}/auth/callback/facebook`,
+        code,
+      },
+      timeout: 10000,
+    });
+
+    const accessToken = tokenRes.data.access_token;
+    const meRes = await axios.get("https://graph.facebook.com/v19.0/me", {
+      params: { fields: "id,name,email", access_token: accessToken },
+      timeout: 8000,
+    });
+
+    const { email, name, id } = meRes.data;
+    const key = (email || `fb_${id}@viralmate.app`).toLowerCase();
+
+    if (!userStore.has(key)) {
+      userStore.set(key, { name: name || "Facebook User", password: "", verified: true, plan: "free" });
+    } else {
+      const u = userStore.get(key);
+      userStore.set(key, { ...u, verified: true });
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const params = new URLSearchParams({ success: "true", token, userId: key, platform: "facebook" });
+    return res.redirect(`${APP_SCHEME}://social-callback?${params.toString()}`);
+
+  } catch (err) {
+    console.error("Facebook login callback error:", err.response?.data || err.message);
+    return res.redirect(`${APP_SCHEME}://social-callback?error=server_error&platform=facebook`);
+  }
+});
 
 // ── 404 & GLOBAL ERROR HANDLER ────────────────────────────────────────────────
 app.use((_, res) => res.status(404).json({ error: "Route not found." }));
