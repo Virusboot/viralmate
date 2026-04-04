@@ -90,6 +90,40 @@ app.get("/", (_, res) =>
   res.json({ status: "ok", message: "ViralMate Backend 🚀", version: "3.0" })
 );
 
+// ── ENHANCED HEALTH CHECK with GROQ test ────────────────────────────────────
+app.get("/health", async (_, res) => {
+  const groqOk = !!process.env.GROQ_API_KEY;
+  // Quick model availability check
+  let activeModel = "unknown";
+  if (groqOk) {
+    const MODELS = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant"];
+    for (const model of MODELS) {
+      try {
+        await axios.post("https://api.groq.com/openai/v1/chat/completions",
+          { model, messages: [{ role: "user", content: "hi" }], max_tokens: 1 },
+          { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` }, timeout: 5000 }
+        );
+        activeModel = model;
+        break;
+      } catch (e) {
+        const msg = JSON.stringify(e.response?.data || "");
+        if (e.response?.status === 401) { activeModel = "AUTH_FAILED"; break; }
+        if (msg.includes("decommissioned") || msg.includes("not found")) continue;
+        if (e.response?.status === 429) { activeModel = model + " (rate limited)"; break; }
+        break;
+      }
+    }
+  }
+  res.json({
+    status: "ok",
+    version: "3.1",
+    groqKeySet: groqOk,
+    activeModel,
+    resendKeySet: !!process.env.RESEND_API_KEY,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTH ROUTES
 // ─────────────────────────────────────────────────────────────────────────────
@@ -536,18 +570,24 @@ app.post("/ai", async (req, res) => {
     return res.status(400).json({ error: "Prompt is too long (max 2000 characters)." });
 
   try {
-    const r = await axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model: "llama-3.3-70b-versatile",
-        messages: [
+    // Model fallback chain: try best model first, fall back to faster one
+    const MODELS = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"];
+    let lastErr = null;
+
+    for (const model of MODELS) {
+      try {
+        const r = await axios.post(
+          "https://api.groq.com/openai/v1/chat/completions",
           {
-            role: "system",
-            content: `You are ViralMate — India's #1 AI viral content strategist.
+            model,
+            messages: [
+              {
+                role: "system",
+                content: `You are ViralMate — India's #1 AI viral content strategist.
 You specialize in creating explosive, scroll-stopping content for Instagram Reels, YouTube Shorts, and Facebook.
 Your outputs are NEVER generic. They are:
 • Trend-aware: You know what's viral RIGHT NOW in India
-• Hook-first: Every response starts with something that stops the scroll  
+• Hook-first: Every response starts with something that stops the scroll
 • Structured beautifully: Use numbered lists, emojis, clear sections — never plain walls of text
 • Actionable: Include hooks, captions, hashtags, posting tips
 • Bilingual-smart: Mix Hindi+English (Hinglish) naturally when the user writes in Hindi/Hinglish
@@ -558,26 +598,38 @@ When generating captions: Start with a 1-line hook, tell a micro-story, end with
 When generating hashtags: Mix 5 niche + 5 medium + 5 broad tags for maximum reach.
 Always format responses with clear sections, emojis as visual anchors, and numbered lists.
 Respond in the same language as the user's message.`,
+              },
+              { role: "user", content: prompt.trim() },
+            ],
+            max_tokens: 2048,
+            temperature: 0.8,
           },
-          { role: "user", content: prompt.trim() },
-        ],
-        max_tokens:  1024,
-        temperature: 0.8,
-      },
-      {
-        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
-        timeout: 30000,
+          {
+            headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+            timeout: 35000,
+          }
+        );
+        return res.json({ result: r.data.choices[0].message.content });
+      } catch (err) {
+        lastErr = err;
+        // Only retry on model-not-found (404) or deprecated model errors
+        const status = err.response?.status;
+        const errMsg = JSON.stringify(err.response?.data || "");
+        if (status === 404 || errMsg.includes("decommissioned") || errMsg.includes("deprecated") || errMsg.includes("not found")) {
+          console.warn(`Model ${model} unavailable, trying next...`);
+          continue;
+        }
+        // For other errors (401, 429, timeout) don't retry with different model
+        break;
       }
-    );
-    return res.json({ result: r.data.choices[0].message.content });
+    }
 
-  } catch (err) {
-    console.error("Groq error:", err.response?.data || err.message);
-    if (err.code === "ECONNABORTED")     return res.status(504).json({ error: "AI request timed out. Please try again." });
-    if (err.response?.status === 429)   return res.status(429).json({ error: "Too many requests. Please wait a moment." });
-    if (err.response?.status === 401)   return res.status(500).json({ error: "AI authentication failed." });
+    // All models failed
+    console.error("Groq error:", lastErr?.response?.data || lastErr?.message);
+    if (lastErr?.code === "ECONNABORTED")       return res.status(504).json({ error: "AI request timed out. Please try again." });
+    if (lastErr?.response?.status === 429)      return res.status(429).json({ error: "Too many requests. Please wait a moment." });
+    if (lastErr?.response?.status === 401)      return res.status(500).json({ error: "GROQ_API_KEY is invalid or not set. Please update your Railway environment variables." });
     return res.status(500).json({ error: "AI service is unavailable. Please try again." });
-  }
 });
 
 // ── USER DATA DELETION (Facebook requirement) ─────────────────────────────────
@@ -741,43 +793,79 @@ For each idea return this exact JSON structure:
 Make them highly specific, creative, and currently trending in India 2025. Mix Hindi+English naturally.`;
 
   try {
-    const r = await axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 3000,
-        temperature: 0.85,
-      },
-      {
-        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
-        timeout: 40000,
+    // Model fallback chain
+    const MODELS = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"];
+    let rawContent = null;
+    let lastErr = null;
+
+    for (const model of MODELS) {
+      try {
+        const r = await axios.post(
+          "https://api.groq.com/openai/v1/chat/completions",
+          {
+            model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
+            max_tokens: 4000,
+            temperature: 0.85,
+          },
+          {
+            headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+            timeout: 45000,
+          }
+        );
+        rawContent = r.data.choices[0].message.content;
+        break; // success
+      } catch (err) {
+        lastErr = err;
+        const status = err.response?.status;
+        const errMsg = JSON.stringify(err.response?.data || "");
+        if (status === 404 || errMsg.includes("decommissioned") || errMsg.includes("deprecated") || errMsg.includes("not found")) {
+          console.warn(`Trending: model ${model} unavailable, trying next...`);
+          continue;
+        }
+        break;
       }
-    );
+    }
+
+    if (!rawContent) {
+      console.error("Trending error:", lastErr?.response?.data || lastErr?.message);
+      if (lastErr?.response?.status === 401) return res.status(500).json({ error: "GROQ_API_KEY is invalid. Please update Railway env vars." });
+      if (lastErr?.response?.status === 429) return res.status(429).json({ error: "Too many requests. Wait a moment." });
+      if (lastErr?.code === "ECONNABORTED")  return res.status(504).json({ error: "Request timed out. Please try again." });
+      return res.status(500).json({ error: "Could not fetch trending ideas. Please try again." });
+    }
 
     let ideas;
     try {
-      const raw = r.data.choices[0].message.content;
-      // Robust JSON extraction — strip markdown fences if present
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("No JSON found");
-      const parsed = JSON.parse(jsonMatch[0]);
-      ideas = parsed.ideas || parsed;
-      if (!Array.isArray(ideas)) throw new Error("ideas is not array");
+      // Robust JSON extraction — handles markdown fences and extra text
+      let jsonStr = rawContent;
+      // Try direct parse first
+      try {
+        const direct = JSON.parse(jsonStr);
+        ideas = direct.ideas || (Array.isArray(direct) ? direct : null);
+      } catch (_) {
+        // Strip markdown code blocks
+        jsonStr = jsonStr.replace(/```json\n?/gi, "").replace(/```\n?/gi, "").trim();
+        // Find outermost JSON object
+        const start = jsonStr.indexOf("{");
+        const end = jsonStr.lastIndexOf("}");
+        if (start === -1 || end === -1) throw new Error("No JSON object found");
+        const parsed = JSON.parse(jsonStr.slice(start, end + 1));
+        ideas = parsed.ideas || (Array.isArray(parsed) ? parsed : null);
+      }
+      if (!Array.isArray(ideas) || ideas.length === 0) throw new Error("No valid ideas array");
     } catch (parseErr) {
-      console.error("Parse error:", parseErr.message);
-      return res.status(500).json({ error: "Could not parse AI response. Try again." });
+      console.error("Trending parse error:", parseErr.message, "\nRaw:", rawContent.slice(0, 300));
+      return res.status(500).json({ error: "Could not parse AI response. Please try again." });
     }
 
     return res.json({ success: true, ideas, generatedAt: new Date().toISOString() });
 
   } catch (err) {
-    console.error("Trending error:", err.response?.data || err.message);
-    if (err.code === "ECONNABORTED")   return res.status(504).json({ error: "Request timed out. Please try again." });
-    if (err.response?.status === 429) return res.status(429).json({ error: "Too many requests. Wait a moment." });
+    console.error("Trending outer error:", err.message);
     return res.status(500).json({ error: "Could not fetch trending ideas. Please try again." });
   }
 });
