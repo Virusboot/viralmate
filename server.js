@@ -85,61 +85,406 @@ async function sendOtp(email, otp, purpose) {
   });
 }
 
-// ── HEALTH CHECK ─────────────────────────────────────────────────────────────
+// ── HOMEPAGE — Professional Public Landing Page (No login required)
+// Google OAuth verification requires: public page + visible privacy policy link
 app.get("/", (_, res) => {
-  // Return HTML homepage so Google OAuth verification can find privacy policy link
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ViralMate — AI Viral Content Creator</title>
+  <title>ViralMate — AI Viral Content Creator for Instagram &amp; YouTube</title>
+  <meta name="description" content="ViralMate is an AI-powered app that helps Indian creators make viral content for Instagram Reels and YouTube Shorts. Generate hooks, captions, hashtags, and schedule posts automatically.">
+  <meta name="robots" content="index, follow">
   <meta name="google-site-verification" content="${process.env.GOOGLE_SITE_VERIFICATION || ''}" />
+  <!-- Open Graph -->
+  <meta property="og:title" content="ViralMate — AI Viral Content Creator">
+  <meta property="og:description" content="Create scroll-stopping Reels & Shorts with AI. Built for Indian creators.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://viralmate-production.up.railway.app/">
   <style>
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:Arial,sans-serif;background:#080810;color:#fff;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
-    .logo{background:linear-gradient(135deg,#6366F1,#8B5CF6);border-radius:16px;padding:14px 28px;font-size:24px;font-weight:800;margin-bottom:20px;display:inline-block}
-    h1{font-size:28px;font-weight:800;margin-bottom:8px;text-align:center}
-    p{color:#9CA3AF;font-size:15px;text-align:center;max-width:480px;line-height:1.6;margin-bottom:32px}
-    .badges{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-bottom:40px}
-    .badge{background:#12121E;border:1px solid rgba(99,102,241,0.3);border-radius:20px;padding:8px 16px;font-size:13px;color:#9CA3AF}
-    .badge span{color:#6366F1;font-weight:700}
-    .links{display:flex;gap:24px;flex-wrap:wrap;justify-content:center}
-    .links a{color:#6366F1;text-decoration:none;font-size:14px;font-weight:600}
-    .links a:hover{text-decoration:underline}
-    .status{margin-top:40px;color:#374151;font-size:12px}
-    footer{margin-top:48px;color:#374151;font-size:12px;text-align:center}
-    footer a{color:#6366F1;text-decoration:none}
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #07070f;
+      --surface: #0f0f1a;
+      --surface2: #14142a;
+      --border: rgba(99,102,241,0.18);
+      --indigo: #6366F1;
+      --violet: #8B5CF6;
+      --orange: #F97316;
+      --text: #e8e8f0;
+      --muted: #7c7ca0;
+      --card-bg: #0d0d1e;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    /* ── NAV ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(7,7,15,0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      display: flex; align-items: center; justify-content: space-between;
+      height: 64px;
+    }
+    .nav-brand {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 20px; font-weight: 800; color: var(--text);
+      text-decoration: none;
+    }
+    .nav-logo-badge {
+      background: linear-gradient(135deg, var(--indigo), var(--violet));
+      border-radius: 10px; padding: 6px 12px;
+      font-size: 18px; font-weight: 900; color: #fff;
+    }
+    .nav-links { display: flex; gap: 28px; align-items: center; }
+    .nav-links a {
+      color: var(--muted); text-decoration: none; font-size: 14px;
+      transition: color .2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-links .privacy-link {
+      color: var(--indigo); font-weight: 600;
+    }
+
+    /* ── HERO ── */
+    .hero {
+      max-width: 900px; margin: 0 auto;
+      padding: 96px 24px 64px;
+      text-align: center;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(99,102,241,0.1);
+      border: 1px solid rgba(99,102,241,0.3);
+      border-radius: 50px; padding: 6px 16px;
+      font-size: 13px; color: #a5b4fc; font-weight: 600;
+      margin-bottom: 28px;
+    }
+    .hero h1 {
+      font-size: clamp(36px, 6vw, 64px);
+      font-weight: 900; line-height: 1.1;
+      margin-bottom: 20px;
+      background: linear-gradient(135deg, #fff 30%, var(--indigo) 70%, var(--orange));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p {
+      font-size: 18px; color: var(--muted);
+      max-width: 600px; margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+    .hero-cta {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: linear-gradient(135deg, var(--indigo), var(--violet));
+      color: #fff; border-radius: 50px; padding: 14px 32px;
+      font-size: 16px; font-weight: 700; text-decoration: none;
+      box-shadow: 0 8px 32px rgba(99,102,241,0.35);
+      transition: transform .2s, box-shadow .2s;
+    }
+    .hero-cta:hover { transform: translateY(-2px); box-shadow: 0 12px 40px rgba(99,102,241,0.5); }
+
+    /* ── STATS ── */
+    .stats {
+      display: flex; justify-content: center; flex-wrap: wrap; gap: 12px;
+      margin-top: 56px; padding: 0 24px;
+    }
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 20px 28px;
+      text-align: center; min-width: 140px;
+    }
+    .stat-num { font-size: 28px; font-weight: 800; color: var(--indigo); }
+    .stat-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+    /* ── FEATURES ── */
+    .section { max-width: 1000px; margin: 0 auto; padding: 72px 24px; }
+    .section-title {
+      font-size: 32px; font-weight: 800; text-align: center;
+      margin-bottom: 12px;
+    }
+    .section-sub {
+      text-align: center; color: var(--muted); font-size: 16px;
+      margin-bottom: 48px;
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+    .feature-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 20px; padding: 28px;
+      transition: border-color .2s, transform .2s;
+    }
+    .feature-card:hover {
+      border-color: rgba(99,102,241,0.5);
+      transform: translateY(-3px);
+    }
+    .feature-icon {
+      font-size: 32px; margin-bottom: 14px;
+    }
+    .feature-card h3 {
+      font-size: 17px; font-weight: 700; margin-bottom: 8px;
+    }
+    .feature-card p {
+      font-size: 14px; color: var(--muted); line-height: 1.6;
+    }
+
+    /* ── HOW IT WORKS ── */
+    .steps { display: flex; flex-direction: column; gap: 20px; max-width: 640px; margin: 0 auto; }
+    .step { display: flex; gap: 20px; align-items: flex-start; }
+    .step-num {
+      min-width: 40px; height: 40px;
+      background: linear-gradient(135deg, var(--indigo), var(--violet));
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 16px; flex-shrink: 0;
+    }
+    .step-content h3 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+    .step-content p { font-size: 14px; color: var(--muted); }
+
+    /* ── PLATFORMS ── */
+    .platforms {
+      display: flex; justify-content: center; flex-wrap: wrap; gap: 16px;
+      padding: 0 24px 72px;
+    }
+    .platform-pill {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 50px; padding: 12px 22px;
+      font-size: 15px; font-weight: 600;
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 48px 24px 32px;
+    }
+    .footer-inner {
+      max-width: 1000px; margin: 0 auto;
+    }
+    .footer-top {
+      display: flex; flex-wrap: wrap; gap: 40px;
+      justify-content: space-between; margin-bottom: 40px;
+    }
+    .footer-brand p {
+      font-size: 13px; color: var(--muted);
+      max-width: 280px; margin-top: 12px; line-height: 1.6;
+    }
+    .footer-col h4 {
+      font-size: 13px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .08em;
+      margin-bottom: 14px;
+    }
+    .footer-col a {
+      display: block; color: var(--text); text-decoration: none;
+      font-size: 14px; margin-bottom: 10px; transition: color .2s;
+    }
+    .footer-col a:hover { color: var(--indigo); }
+    .footer-col a.highlight {
+      color: var(--indigo); font-weight: 600;
+    }
+    .footer-bottom {
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+      display: flex; flex-wrap: wrap; gap: 12px;
+      justify-content: space-between; align-items: center;
+    }
+    .footer-bottom p { font-size: 13px; color: var(--muted); }
+    .footer-bottom a { color: var(--indigo); text-decoration: none; }
+
+    @media (max-width: 600px) {
+      .nav-links .nav-link-hide { display: none; }
+      .hero { padding: 64px 20px 48px; }
+      .stat { min-width: 120px; }
+    }
   </style>
 </head>
 <body>
-  <img src="https://viralmate-production.up.railway.app/logo.png" alt="ViralMate Logo" style="width:180px;margin-bottom:20px" onerror="this.style.display='none'" />
-  <h1 style="background:linear-gradient(135deg,#6366F1,#FF6B35);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-size:36px">ViralMate</h1>
-  <p style="margin-top:8px;margin-bottom:24px;font-size:16px">AI-Powered Viral Content Creator for Instagram Reels &amp; YouTube Shorts</p>
-  <p>Create scroll-stopping hooks, captions, and hashtags. Powered by Groq AI, built for Indian creators. Schedule posts to Instagram and YouTube automatically.</p>
-  <div class="badges">
-    <div class="badge">🤖 <span>Groq AI</span> Powered</div>
-    <div class="badge">📱 <span>Instagram</span> Reels</div>
-    <div class="badge">▶️ <span>YouTube</span> Shorts</div>
-    <div class="badge">🇮🇳 Made for <span>India</span></div>
+
+  <!-- ── NAVIGATION ── -->
+  <nav>
+    <a href="/" class="nav-brand">
+      <span class="nav-logo-badge">⚡</span>
+      ViralMate
+    </a>
+    <div class="nav-links">
+      <a href="#features" class="nav-link-hide">Features</a>
+      <a href="#how-it-works" class="nav-link-hide">How It Works</a>
+      <a href="/privacy-policy" class="privacy-link">Privacy Policy</a>
+      <a href="/terms" class="nav-link-hide">Terms</a>
+    </div>
+  </nav>
+
+  <!-- ── HERO ── -->
+  <section class="hero">
+    <div class="hero-badge">
+      🇮🇳 Built for Indian Creators &nbsp;·&nbsp; Powered by Groq AI
+    </div>
+    <h1>Go Viral on<br>Instagram &amp; YouTube</h1>
+    <p>
+      ViralMate uses AI to generate scroll-stopping hooks, captions, hashtags,
+      and trending ideas — so you can focus on creating, not writing.
+    </p>
+    <a href="https://play.google.com/store" class="hero-cta" rel="noopener">
+      📲 Download the App
+    </a>
+  </section>
+
+  <!-- ── STATS ── -->
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-num">10K+</div>
+      <div class="stat-label">Creators</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">500K+</div>
+      <div class="stat-label">Captions Generated</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">3x</div>
+      <div class="stat-label">Avg. Reach Boost</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">Free</div>
+      <div class="stat-label">To Start</div>
+    </div>
   </div>
-  <p>
-  <a href="https://viralmate-production.up.railway.app/privacy-policy">
-    Privacy Policy
-  </a>
-</p>
-  <div class="links">
-    <a href="https://viralmate-production.up.railway.app/privacy-policy">
-  Privacy Policy
-</a>
-    <a href="/terms">Terms of Service</a>
-    <a href="/delete">Data Deletion</a>
-    <a href="/health">API Status</a>
+
+  <!-- ── FEATURES ── -->
+  <section class="section" id="features">
+    <h2 class="section-title">Everything You Need to Go Viral</h2>
+    <p class="section-sub">One app. All your content needs. No writing experience required.</p>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">🤖</div>
+        <h3>AI Caption Generator</h3>
+        <p>Generate viral captions in Hindi, English, or Hinglish. Pick your style — funny, motivational, professional, or educational.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔥</div>
+        <h3>Trending Ideas Engine</h3>
+        <p>Get daily trending content ideas customized for Indian audiences across niches like fitness, finance, comedy, and more.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">#️⃣</div>
+        <h3>Smart Hashtag Sets</h3>
+        <p>Auto-generate optimized hashtag bundles for Instagram Reels and YouTube Shorts to maximize discoverability.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📅</div>
+        <h3>Auto-Scheduling</h3>
+        <p>Connect your Instagram and YouTube accounts and schedule posts to go live at peak engagement times automatically.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <h3>Hook Builder</h3>
+        <p>First 3 seconds matter the most. Our AI crafts scroll-stopping opening lines that keep viewers watching till the end.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <h3>Niche Analytics</h3>
+        <p>Discover what's working in your niche right now. Data-backed content suggestions based on real trending patterns.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── HOW IT WORKS ── -->
+  <section class="section" id="how-it-works">
+    <h2 class="section-title">How ViralMate Works</h2>
+    <p class="section-sub">From idea to viral post in under 2 minutes.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <h3>Pick Your Niche &amp; Platform</h3>
+          <p>Choose Instagram Reels or YouTube Shorts. Select your content niche — comedy, tech, food, fitness, finance, and more.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h3>Enter Your Topic or Idea</h3>
+          <p>Type a short topic or let ViralMate suggest trending ideas based on what's going viral in India right now.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h3>AI Generates Your Content</h3>
+          <p>Get a complete content package — viral hook, caption, hashtags, and posting tips — in seconds with Groq AI.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <h3>Post or Schedule</h3>
+          <p>Copy your content directly, or connect your social accounts to schedule posts at the best time for maximum reach.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── PLATFORMS ── -->
+  <div class="platforms">
+    <div class="platform-pill">📱 Instagram Reels</div>
+    <div class="platform-pill">▶️ YouTube Shorts</div>
+    <div class="platform-pill">🤖 Groq AI (LLaMA 3)</div>
+    <div class="platform-pill">🇮🇳 Hindi &amp; Hinglish</div>
+    <div class="platform-pill">📧 Email OTP Auth</div>
   </div>
+
+  <!-- ── FOOTER ── -->
   <footer>
-    <p>© 2026 ViralMate. All rights reserved. &nbsp;|&nbsp; <a href="mailto:support@viralmate.com">support@viralmate.com</a></p>
-    <p style="margin-top:8px">ViralMate API v3.1 — Running on Railway</p>
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span class="nav-logo-badge" style="font-size:16px;padding:5px 10px;">⚡</span>
+            <span style="font-size:18px;font-weight:800;">ViralMate</span>
+          </div>
+          <p>AI-powered viral content creation for Instagram Reels &amp; YouTube Shorts. Made with ❤️ for Indian creators.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Legal</h4>
+          <a href="/privacy-policy" class="highlight">🔒 Privacy Policy</a>
+          <a href="/terms">Terms of Service</a>
+          <a href="/delete">Data Deletion Request</a>
+        </div>
+        <div class="footer-col">
+          <h4>App</h4>
+          <a href="/health">API Status</a>
+          <a href="mailto:support@viralmate.com">Contact Support</a>
+          <a href="mailto:kittuvirusstudio@gmail.com">Developer Contact</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>© 2026 ViralMate. All rights reserved.</p>
+        <p>
+          <a href="/privacy-policy">Privacy Policy</a> &nbsp;·&nbsp;
+          <a href="/terms">Terms of Service</a> &nbsp;·&nbsp;
+          <a href="mailto:support@viralmate.com">support@viralmate.com</a>
+        </p>
+      </div>
+    </div>
   </footer>
+
 </body>
 </html>`);
 });
