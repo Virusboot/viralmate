@@ -86,9 +86,54 @@ async function sendOtp(email, otp, purpose) {
 }
 
 // ── HEALTH CHECK ─────────────────────────────────────────────────────────────
-app.get("/", (_, res) =>
-  res.json({ status: "ok", message: "ViralMate Backend 🚀", version: "3.0" })
-);
+app.get("/", (_, res) => {
+  // Return HTML homepage so Google OAuth verification can find privacy policy link
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ViralMate — AI Viral Content Creator</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#080810;color:#fff;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
+    .logo{background:linear-gradient(135deg,#6366F1,#8B5CF6);border-radius:16px;padding:14px 28px;font-size:24px;font-weight:800;margin-bottom:20px;display:inline-block}
+    h1{font-size:28px;font-weight:800;margin-bottom:8px;text-align:center}
+    p{color:#9CA3AF;font-size:15px;text-align:center;max-width:480px;line-height:1.6;margin-bottom:32px}
+    .badges{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-bottom:40px}
+    .badge{background:#12121E;border:1px solid rgba(99,102,241,0.3);border-radius:20px;padding:8px 16px;font-size:13px;color:#9CA3AF}
+    .badge span{color:#6366F1;font-weight:700}
+    .links{display:flex;gap:24px;flex-wrap:wrap;justify-content:center}
+    .links a{color:#6366F1;text-decoration:none;font-size:14px;font-weight:600}
+    .links a:hover{text-decoration:underline}
+    .status{margin-top:40px;color:#374151;font-size:12px}
+    footer{margin-top:48px;color:#374151;font-size:12px;text-align:center}
+    footer a{color:#6366F1;text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="logo">⚡ ViralMate</div>
+  <h1>AI-Powered Viral Content Creator</h1>
+  <p>Create scroll-stopping hooks, captions, and hashtags for Instagram Reels and YouTube Shorts. Powered by AI, built for Indian creators.</p>
+  <div class="badges">
+    <div class="badge">🤖 <span>Groq AI</span> Powered</div>
+    <div class="badge">📱 <span>Instagram</span> Reels</div>
+    <div class="badge">▶️ <span>YouTube</span> Shorts</div>
+    <div class="badge">🇮🇳 Made for <span>India</span></div>
+  </div>
+  <div class="links">
+    <a href="/privacy">Privacy Policy</a>
+    <a href="/terms">Terms of Service</a>
+    <a href="/delete">Data Deletion</a>
+    <a href="/health">API Status</a>
+  </div>
+  <footer>
+    <p>© 2026 ViralMate. All rights reserved. &nbsp;|&nbsp; <a href="mailto:support@viralmate.com">support@viralmate.com</a></p>
+    <p style="margin-top:8px">ViralMate API v3.1 — Running on Railway</p>
+  </footer>
+</body>
+</html>`);
+});
 
 // ── ENHANCED HEALTH CHECK with GROQ test ────────────────────────────────────
 app.get("/health", async (_, res) => {
@@ -630,13 +675,6 @@ Respond in the same language as the user's message.`,
     if (lastErr?.response?.status === 429)      return res.status(429).json({ error: "Too many requests. Please wait a moment." });
     if (lastErr?.response?.status === 401)      return res.status(500).json({ error: "GROQ_API_KEY is invalid or not set. Please update your Railway environment variables." });
     return res.status(500).json({ error: "AI service is unavailable. Please try again." });
-
-  } catch (err) {
-    console.error("AI Route Error:", err.message);
-    return res.status(500).json({
-      error: "Something went wrong in AI route."
-    });
-  }
 });
 
 // ── USER DATA DELETION (Facebook requirement) ─────────────────────────────────
@@ -718,6 +756,40 @@ app.post("/user/update-profile", (req, res) => {
   return res.json({ success: true, message: "Profile updated." });
 });
 
+
+// ── TERMS OF SERVICE PAGE ─────────────────────────────────────────────────────
+app.get("/terms", (_, res) => {
+  res.send(`<!DOCTYPE html>
+  <html><head><meta charset="utf-8"><title>ViralMate Terms of Service</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>body{font-family:Arial,sans-serif;max-width:640px;margin:40px auto;padding:20px;color:#333;line-height:1.7;background:#fff}
+  h1{color:#6366F1}h2{color:#374151;font-size:16px;margin-top:24px}
+  a{color:#6366F1}.chip{background:#f5f5ff;border-left:4px solid #6366F1;padding:10px 14px;margin:10px 0;border-radius:4px}</style>
+  </head><body>
+  <h1>ViralMate Terms of Service</h1>
+  <p>Last updated: April 2026</p>
+  <h2>1. Acceptance of Terms</h2>
+  <p>By using ViralMate, you agree to these Terms of Service. If you do not agree, please do not use the service.</p>
+  <h2>2. Description of Service</h2>
+  <p>ViralMate provides AI-powered content generation and social media scheduling tools for creators.</p>
+  <h2>3. User Accounts</h2>
+  <div class="chip">• You are responsible for maintaining the security of your account credentials.</div>
+  <div class="chip">• You must provide accurate information during registration.</div>
+  <div class="chip">• You must be at least 13 years old to use this service.</div>
+  <h2>4. Acceptable Use</h2>
+  <p>You agree not to use ViralMate to generate spam, hateful content, or content that violates platform policies.</p>
+  <h2>5. Social Media Connections</h2>
+  <p>When connecting your social media accounts, you authorize ViralMate to post content on your behalf as directed by you. You can revoke this access at any time.</p>
+  <h2>6. Limitation of Liability</h2>
+  <p>ViralMate is provided "as is". We are not liable for any damages arising from use of the service.</p>
+  <h2>7. Changes to Terms</h2>
+  <p>We may update these terms at any time. Continued use of the service constitutes acceptance of new terms.</p>
+  <h2>Contact</h2>
+  <p><a href="mailto:support@viralmate.com">support@viralmate.com</a></p>
+  <p style="margin-top:32px"><a href="/privacy">Privacy Policy</a> &nbsp;|&nbsp; <a href="/">Home</a></p>
+  </body></html>`);
+});
+
 // ── PRIVACY POLICY PAGE ───────────────────────────────────────────────────────
 app.get("/privacy", (_, res) => {
   res.send(`<!DOCTYPE html>
@@ -741,6 +813,7 @@ app.get("/privacy", (_, res) => {
   <p>You can delete your account and all data at any time via Profile → Settings → Delete Account, or by emailing <a href="mailto:support@viralmate.com">support@viralmate.com</a>.</p>
   <h2>Contact</h2>
   <p><a href="mailto:support@viralmate.com">support@viralmate.com</a></p>
+  <p style="margin-top:32px"><a href="/terms">Terms of Service</a> &nbsp;|&nbsp; <a href="/">Home</a></p>
   </body></html>`);
 });
 
