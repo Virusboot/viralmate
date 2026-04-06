@@ -124,7 +124,7 @@ app.get("/", (_, res) => {
     <div class="badge">🇮🇳 Made for <span>India</span></div>
   </div>
   <div class="links">
-    <a href="/privacy">Privacy Policy</a>
+    <a href="/privacy-policy">Privacy Policy</a>
     <a href="/terms">Terms of Service</a>
     <a href="/delete">Data Deletion</a>
     <a href="/health">API Status</a>
@@ -789,7 +789,10 @@ app.get("/terms", (_, res) => {
 });
 
 // ── PRIVACY POLICY PAGE ───────────────────────────────────────────────────────
-app.get("/privacy", (_, res) => {
+// Google verification fix
+app.get("/privacy-policy", (_, res) => {
+  res.redirect("/privacy");
+});
   res.send(`<!DOCTYPE html>
   <html><head><meta charset="utf-8"><title>ViralMate Privacy Policy</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
