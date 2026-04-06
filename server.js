@@ -790,32 +790,55 @@ app.get("/terms", (_, res) => {
 
 // ── PRIVACY POLICY PAGE ───────────────────────────────────────────────────────
 // Google verification fix
+// ── PRIVACY POLICY PAGE ───────────────────────────────────────────────────────
 app.get("/privacy-policy", (_, res) => {
-  res.redirect("/privacy");
-});
   res.send(`<!DOCTYPE html>
-  <html><head><meta charset="utf-8"><title>ViralMate Privacy Policy</title>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ViralMate Privacy Policy</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>body{font-family:Arial,sans-serif;max-width:640px;margin:40px auto;padding:20px;color:#333;line-height:1.7}
-  h1{color:#6366F1}h2{color:#374151;font-size:16px;margin-top:24px}
-  a{color:#6366F1}.chip{background:#f5f5ff;border-left:4px solid #6366F1;padding:10px 14px;margin:10px 0;border-radius:4px}</style>
-  </head><body>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 640px;
+      margin: 40px auto;
+      padding: 20px;
+      color: #333;
+      line-height: 1.7;
+    }
+    h1 { color: #6366F1; }
+    h2 { color: #374151; font-size: 16px; margin-top: 24px; }
+    a { color: #6366F1; }
+    .chip {
+      background: #f5f5ff;
+      border-left: 4px solid #6366F1;
+      padding: 10px 14px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
   <h1>ViralMate Privacy Policy</h1>
   <p>Last updated: April 2026</p>
+
   <h2>Information We Collect</h2>
-  <div class="chip">• Account information (email, name)</div>
-  <div class="chip">• Social media access tokens (OAuth — stored securely, never your password)</div>
-  <div class="chip">• Content you create and schedule within the app</div>
-  <h2>How We Use Your Data</h2>
-  <p>We use your data solely to provide the ViralMate service — AI content generation and social media scheduling.</p>
+  <div class="chip">• Email & Name</div>
+  <div class="chip">• Social OAuth tokens (secure)</div>
+  <div class="chip">• Content created inside app</div>
+
+  <h2>How We Use Data</h2>
+  <p>We use your data only to provide AI content and scheduling features.</p>
+
   <h2>Data Sharing</h2>
-  <p>We <strong>never</strong> sell your data to third parties. Social connections use official OAuth flows.</p>
-  <h2>Data Deletion</h2>
-  <p>You can delete your account and all data at any time via Profile → Settings → Delete Account, or by emailing <a href="mailto:support@viralmate.com">support@viralmate.com</a>.</p>
+  <p>We never sell your data.</p>
+
   <h2>Contact</h2>
   <p><a href="mailto:support@viralmate.com">support@viralmate.com</a></p>
-  <p style="margin-top:32px"><a href="/terms">Terms of Service</a> &nbsp;|&nbsp; <a href="/">Home</a></p>
-  </body></html>`);
+
+</body>
+</html>`);
 });
 
 
