@@ -123,8 +123,15 @@ app.get("/", (_, res) => {
     <div class="badge">▶️ <span>YouTube</span> Shorts</div>
     <div class="badge">🇮🇳 Made for <span>India</span></div>
   </div>
+  <p>
+  <a href="https://viralmate-production.up.railway.app/privacy-policy">
+    Privacy Policy
+  </a>
+</p>
   <div class="links">
-    <a href="/privacy-policy">Privacy Policy</a>
+    <a href="https://viralmate-production.up.railway.app/privacy-policy">
+  Privacy Policy
+</a>
     <a href="/terms">Terms of Service</a>
     <a href="/delete">Data Deletion</a>
     <a href="/health">API Status</a>
@@ -784,7 +791,9 @@ app.get("/terms", (_, res) => {
   <p>We may update these terms at any time. Continued use of the service constitutes acceptance of new terms.</p>
   <h2>Contact</h2>
   <p><a href="mailto:support@viralmate.com">support@viralmate.com</a></p>
-  <p style="margin-top:32px"><a href="/privacy">Privacy Policy</a> &nbsp;|&nbsp; <a href="/">Home</a></p>
+  <p style="margin-top:32px"><a href="https://viralmate-production.up.railway.app/privacy-policy">
+  Privacy Policy
+</a> &nbsp;|&nbsp; <a href="/">Home</a></p>
   </body></html>`);
 });
 
