@@ -94,6 +94,7 @@ app.get("/", (_, res) => {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ViralMate — AI Viral Content Creator</title>
+  <meta name="google-site-verification" content="${process.env.GOOGLE_SITE_VERIFICATION || ''}" />
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:Arial,sans-serif;background:#080810;color:#fff;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
