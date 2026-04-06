@@ -614,21 +614,19 @@ app.post("/ai", async (req, res) => {
   if (prompt.length > 2000)
     return res.status(400).json({ error: "Prompt is too long (max 2000 characters)." });
 
-  try {
-    // Model fallback chain: try best model first, fall back to faster one
-    const MODELS = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"];
-    let lastErr = null;
+  const MODELS = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"];
+  let lastErr = null;
 
-    for (const model of MODELS) {
-      try {
-        const r = await axios.post(
-          "https://api.groq.com/openai/v1/chat/completions",
-          {
-            model,
-            messages: [
-              {
-                role: "system",
-                content: `You are ViralMate — India's #1 AI viral content strategist.
+  for (const model of MODELS) {
+    try {
+      const r = await axios.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          model,
+          messages: [
+            {
+              role: "system",
+              content: `You are ViralMate — India's #1 AI viral content strategist.
 You specialize in creating explosive, scroll-stopping content for Instagram Reels, YouTube Shorts, and Facebook.
 Your outputs are NEVER generic. They are:
 • Trend-aware: You know what's viral RIGHT NOW in India
@@ -643,38 +641,36 @@ When generating captions: Start with a 1-line hook, tell a micro-story, end with
 When generating hashtags: Mix 5 niche + 5 medium + 5 broad tags for maximum reach.
 Always format responses with clear sections, emojis as visual anchors, and numbered lists.
 Respond in the same language as the user's message.`,
-              },
-              { role: "user", content: prompt.trim() },
-            ],
-            max_tokens: 2048,
-            temperature: 0.8,
-          },
-          {
-            headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
-            timeout: 35000,
-          }
-        );
-        return res.json({ result: r.data.choices[0].message.content });
-      } catch (err) {
-        lastErr = err;
-        // Only retry on model-not-found (404) or deprecated model errors
-        const status = err.response?.status;
-        const errMsg = JSON.stringify(err.response?.data || "");
-        if (status === 404 || errMsg.includes("decommissioned") || errMsg.includes("deprecated") || errMsg.includes("not found")) {
-          console.warn(`Model ${model} unavailable, trying next...`);
-          continue;
+            },
+            { role: "user", content: prompt.trim() },
+          ],
+          max_tokens: 2048,
+          temperature: 0.8,
+        },
+        {
+          headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+          timeout: 35000,
         }
-        // For other errors (401, 429, timeout) don't retry with different model
-        break;
+      );
+      return res.json({ result: r.data.choices[0].message.content });
+    } catch (err) {
+      lastErr = err;
+      const status = err.response?.status;
+      const errMsg = JSON.stringify(err.response?.data || "");
+      if (status === 404 || errMsg.includes("decommissioned") || errMsg.includes("deprecated") || errMsg.includes("not found")) {
+        console.warn(`Model ${model} unavailable, trying next...`);
+        continue;
       }
+      break;
     }
+  }
 
-    // All models failed
-    console.error("Groq error:", lastErr?.response?.data || lastErr?.message);
-    if (lastErr?.code === "ECONNABORTED")       return res.status(504).json({ error: "AI request timed out. Please try again." });
-    if (lastErr?.response?.status === 429)      return res.status(429).json({ error: "Too many requests. Please wait a moment." });
-    if (lastErr?.response?.status === 401)      return res.status(500).json({ error: "GROQ_API_KEY is invalid or not set. Please update your Railway environment variables." });
-    return res.status(500).json({ error: "AI service is unavailable. Please try again." });
+  // All models failed
+  console.error("Groq /ai error:", lastErr?.response?.data || lastErr?.message);
+  if (lastErr?.code === "ECONNABORTED")      return res.status(504).json({ error: "AI request timed out. Please try again." });
+  if (lastErr?.response?.status === 429)     return res.status(429).json({ error: "Too many requests. Please wait a moment." });
+  if (lastErr?.response?.status === 401)     return res.status(500).json({ error: "GROQ_API_KEY is invalid. Check Railway environment variables." });
+  return res.status(500).json({ error: "AI service is unavailable. Please try again." });
 });
 
 // ── USER DATA DELETION (Facebook requirement) ─────────────────────────────────
