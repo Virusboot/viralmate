@@ -113,9 +113,10 @@ app.get("/", (_, res) => {
   </style>
 </head>
 <body>
-  <div class="logo">⚡ ViralMate</div>
-  <h1>AI-Powered Viral Content Creator</h1>
-  <p>Create scroll-stopping hooks, captions, and hashtags for Instagram Reels and YouTube Shorts. Powered by AI, built for Indian creators.</p>
+  <img src="https://viralmate-production.up.railway.app/logo.png" alt="ViralMate Logo" style="width:180px;margin-bottom:20px" onerror="this.style.display='none'" />
+  <h1 style="background:linear-gradient(135deg,#6366F1,#FF6B35);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-size:36px">ViralMate</h1>
+  <p style="margin-top:8px;margin-bottom:24px;font-size:16px">AI-Powered Viral Content Creator for Instagram Reels &amp; YouTube Shorts</p>
+  <p>Create scroll-stopping hooks, captions, and hashtags. Powered by Groq AI, built for Indian creators. Schedule posts to Instagram and YouTube automatically.</p>
   <div class="badges">
     <div class="badge">🤖 <span>Groq AI</span> Powered</div>
     <div class="badge">📱 <span>Instagram</span> Reels</div>
