@@ -582,6 +582,7 @@ app.post("/login", (req, res) => {
   return res.json({
     success: true,
     token,
+    userId: key,
     user: { name: user.name, email: key, plan: user.plan || "free" },
   });
 });
@@ -609,7 +610,15 @@ app.post("/verify-otp", (req, res) => {
     const u = userStore.get(key);
     if (u) userStore.set(key, { ...u, verified: true });
     otpStore.delete(sk);
-    return res.json({ success: true, message: "Email verified successfully!" });
+    // Return token + userId so Flutter can save session immediately after OTP
+    const token = crypto.randomBytes(32).toString("hex");
+    return res.json({
+      success: true,
+      message: "Email verified successfully!",
+      token,
+      userId: key,
+      user: { name: u?.name || "", email: key, plan: u?.plan || "free" }
+    });
   }
   if (purpose === "reset") {
     otpStore.set(sk, { ...rec, verified: true });
@@ -1548,7 +1557,12 @@ app.get("/auth/callback/google", async (req, res) => {
     }
 
     const token = crypto.randomBytes(32).toString("hex");
-    const params = new URLSearchParams({ success: "true", token, userId: key, platform: "google" });
+    const savedUser = userStore.get(key);
+    const params = new URLSearchParams({
+      success: "true", token, userId: key, platform: "google",
+      name: savedUser?.name || name || "",
+      email: key,
+    });
     return res.redirect(`${APP_SCHEME}://social-callback?${params.toString()}`);
 
   } catch (err) {
@@ -1595,7 +1609,22 @@ app.get("/auth/callback/facebook", async (req, res) => {
     }
 
     const token = crypto.randomBytes(32).toString("hex");
-    const params = new URLSearchParams({ success: "true", token, userId: key, platform: "facebook" });
+    // Also auto-connect Facebook in socialStore so Connect Accounts shows it as connected
+    socialStore.set(`${key}:facebook`, {
+      accessToken,
+      accountName: name || "Facebook User",
+      handle: id,
+      followers: "",
+      profilePic: "",
+      connectedAt: new Date().toISOString(),
+    });
+    const savedUser = userStore.get(key);
+    const params = new URLSearchParams({
+      success: "true", token, userId: key, platform: "facebook",
+      name: savedUser?.name || name || "",
+      email: key,
+      facebookConnected: "true",
+    });
     return res.redirect(`${APP_SCHEME}://social-callback?${params.toString()}`);
 
   } catch (err) {
