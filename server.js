@@ -50,8 +50,10 @@ const APP_SCHEME  = process.env.APP_SCHEME  || "viralmate";
 // ── EMAIL (Resend) ────────────────────────────────────────────────────────────
 async function sendOtp(email, otp, purpose) {
   const isReset = purpose === "reset";
+  // Log OTP to Railway logs as backup (useful when email delivery fails)
+  console.log(`[OTP] ${purpose.toUpperCase()} | Email: ${email} | OTP: ${otp}`);
   await resend.emails.send({
-    from: "ViralMate <onboarding@resend.dev>",
+    from: process.env.FROM_EMAIL || "ViralMate <onboarding@resend.dev>",
     to:   [email],
     subject: isReset
       ? "ViralMate - Password Reset OTP"
@@ -558,7 +560,16 @@ app.post("/register", async (req, res) => {
     return res.json({ success: true, message: "OTP sent. Please check your email." });
   } catch (err) {
     console.error("Email error:", err.message);
-    return res.status(500).json({ error: "Could not send verification email. Please try again." });
+    // Email failed but account created - return OTP in response for development/testing
+    // In production with verified domain this won't be needed
+    if (process.env.NODE_ENV !== "production" || process.env.SHOW_OTP_ON_FAIL === "true") {
+      return res.json({
+        success: true,
+        message: `Email delivery failed. Your OTP is: ${otp} (shown because email is not configured)`,
+        devOtp: otp
+      });
+    }
+    return res.status(500).json({ error: "Could not send verification email. Please check your email address or try again later." });
   }
 });
 
@@ -582,7 +593,6 @@ app.post("/login", (req, res) => {
   return res.json({
     success: true,
     token,
-    userId: key,
     user: { name: user.name, email: key, plan: user.plan || "free" },
   });
 });
@@ -610,7 +620,7 @@ app.post("/verify-otp", (req, res) => {
     const u = userStore.get(key);
     if (u) userStore.set(key, { ...u, verified: true });
     otpStore.delete(sk);
-    // Return token + userId so Flutter can save session immediately after OTP
+    // Return token + userId so Flutter can save session immediately
     const token = crypto.randomBytes(32).toString("hex");
     return res.json({
       success: true,
@@ -722,13 +732,16 @@ app.post("/social/auth-url", (req, res) => {
       return res.status(503).json({
         error: "Facebook/Instagram OAuth is not configured yet.",
         setup: "Set FACEBOOK_APP_ID and FACEBOOK_APP_SECRET on Railway.",
+        hint: "Also make sure your Facebook App is in Live mode in Meta Developer Console."
       });
     }
     const redirectUri = encodeURIComponent(process.env.FACEBOOK_REDIRECT_URL || `${BACKEND_URL}/social/callback/facebook`);
+    // Instagram requires Facebook Login + Business Account linked to Facebook Page
+    // Regular personal Instagram accounts cannot be connected via API
     const scope = platform === "instagram"
-      ? "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement"
-      : "pages_manage_posts,pages_read_engagement,pages_show_list";
-    authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code`;
+      ? "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,business_management"
+      : "pages_manage_posts,pages_read_engagement,pages_show_list,public_profile,email";
+    authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code&auth_type=rerequest`;
 
   } else if (platform === "youtube") {
     if (!process.env.YOUTUBE_CLIENT_ID) {
@@ -816,8 +829,12 @@ app.get("/social/callback/facebook", async (req, res) => {
       }
 
       if (!igId) {
+        // User has no Instagram Business account linked to any Facebook Page
+        const errMsg = encodeURIComponent(
+          "Instagram Business account not found. Please: 1) Convert Instagram to Business/Creator account, 2) Link it to a Facebook Page, then try again."
+        );
         return res.redirect(
-          `${APP_SCHEME}://social-callback?error=no_instagram_business&platform=instagram`
+          `${APP_SCHEME}://social-callback?error=no_instagram_business&platform=instagram&message=${errMsg}`
         );
       }
 
@@ -876,7 +893,8 @@ app.get("/social/callback/facebook", async (req, res) => {
   } catch (err) {
     console.error("Facebook/Instagram OAuth error:", err.response?.data || err.message);
     const errCode = err.response?.status === 401 ? "invalid_token" : "server_error";
-    return res.redirect(`${APP_SCHEME}://social-callback?error=${errCode}&platform=${platform}`);
+    const errMsg = encodeURIComponent(err.response?.data?.error?.message || "OAuth failed");
+    return res.redirect(`${APP_SCHEME}://social-callback?error=${errCode}&platform=${platform}&message=${errMsg}`);
   }
 });
 
@@ -1493,15 +1511,18 @@ app.post("/auth/login-url", (req, res) => {
   let authUrl = "";
 
   if (platform === "google") {
-    if (!process.env.YOUTUBE_CLIENT_ID) {
+    // Use GOOGLE_LOGIN_CLIENT_ID if set, else fall back to YOUTUBE_CLIENT_ID
+    const googleClientId = process.env.GOOGLE_LOGIN_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
+    if (!googleClientId) {
       return res.status(503).json({
         error: "Google login is not configured yet.",
-        setup: "Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET on Railway.",
+        setup: "Set GOOGLE_LOGIN_CLIENT_ID on Railway (same Client ID, add /auth/callback/google to redirect URIs in Google Console).",
       });
     }
     const redirectUri = encodeURIComponent(`${BACKEND_URL}/auth/callback/google`);
+    // Use ONLY basic profile scopes - no YouTube - avoids scary permission warnings
     const scope = encodeURIComponent("openid email profile");
-    authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${process.env.YOUTUBE_CLIENT_ID}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code&access_type=offline&prompt=consent`;
+    authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${googleClientId}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code&prompt=select_account`;
 
   } else if (platform === "facebook") {
     if (!process.env.FACEBOOK_APP_ID) {
@@ -1530,10 +1551,12 @@ app.get("/auth/callback/google", async (req, res) => {
   oauthStates.delete(state);
 
   try {
+    const googleClientId = process.env.GOOGLE_LOGIN_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
+    const googleClientSecret = process.env.GOOGLE_LOGIN_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
     const tokenRes = await axios.post("https://oauth2.googleapis.com/token", {
       code,
-      client_id: process.env.YOUTUBE_CLIENT_ID,
-      client_secret: process.env.YOUTUBE_CLIENT_SECRET,
+      client_id: googleClientId,
+      client_secret: googleClientSecret,
       redirect_uri: `${BACKEND_URL}/auth/callback/google`,
       grant_type: "authorization_code",
     }, { timeout: 10000 });
@@ -1557,12 +1580,7 @@ app.get("/auth/callback/google", async (req, res) => {
     }
 
     const token = crypto.randomBytes(32).toString("hex");
-    const savedUser = userStore.get(key);
-    const params = new URLSearchParams({
-      success: "true", token, userId: key, platform: "google",
-      name: savedUser?.name || name || "",
-      email: key,
-    });
+    const params = new URLSearchParams({ success: "true", token, userId: key, platform: "google" });
     return res.redirect(`${APP_SCHEME}://social-callback?${params.toString()}`);
 
   } catch (err) {
@@ -1609,22 +1627,7 @@ app.get("/auth/callback/facebook", async (req, res) => {
     }
 
     const token = crypto.randomBytes(32).toString("hex");
-    // Also auto-connect Facebook in socialStore so Connect Accounts shows it as connected
-    socialStore.set(`${key}:facebook`, {
-      accessToken,
-      accountName: name || "Facebook User",
-      handle: id,
-      followers: "",
-      profilePic: "",
-      connectedAt: new Date().toISOString(),
-    });
-    const savedUser = userStore.get(key);
-    const params = new URLSearchParams({
-      success: "true", token, userId: key, platform: "facebook",
-      name: savedUser?.name || name || "",
-      email: key,
-      facebookConnected: "true",
-    });
+    const params = new URLSearchParams({ success: "true", token, userId: key, platform: "facebook" });
     return res.redirect(`${APP_SCHEME}://social-callback?${params.toString()}`);
 
   } catch (err) {
