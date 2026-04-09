@@ -1540,6 +1540,65 @@ app.post("/auth/login-url", (req, res) => {
   return res.json({ success: true, authUrl });
 });
 
+// ── GOOGLE LOGIN CALLBACK (FIX) ─────────────────────────────
+app.get("/auth/callback/google", async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error || !code || !state) {
+    return res.redirect(`${APP_SCHEME}://login?error=google_failed`);
+  }
+
+  const sd = oauthStates.get(state);
+  if (!sd) {
+    return res.redirect(`${APP_SCHEME}://login?error=invalid_state`);
+  }
+
+  oauthStates.delete(state);
+
+  try {
+    const tokenRes = await axios.post("https://oauth2.googleapis.com/token", {
+      code,
+      client_id: process.env.GOOGLE_LOGIN_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET,
+      redirect_uri: `${BACKEND_URL}/auth/callback/google`,
+      grant_type: "authorization_code",
+    });
+
+    const { access_token } = tokenRes.data;
+
+    const userInfo = await axios.get("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${access_token}` },
+    });
+
+    const email = userInfo.data.email.toLowerCase();
+    const name = userInfo.data.name || "Google User";
+
+    if (!userStore.has(email)) {
+      userStore.set(email, {
+        name,
+        password: "",
+        verified: true,
+        plan: "free",
+      });
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+
+    const params = new URLSearchParams({
+      success: "true",
+      email,
+      name,
+      token,
+    });
+
+    return res.redirect(`${APP_SCHEME}://login-success?${params.toString()}`);
+
+  } catch (err) {
+    console.error("Google callback error:", err.response?.data || err.message);
+    return res.redirect(`${APP_SCHEME}://login?error=google_failed`);
+  }
+});
+
 // GET /auth/callback/google — handles Google login OAuth callback
 app.get("/auth/callback/google", async (req, res) => {
   const { code, state, error } = req.query;
