@@ -1580,12 +1580,14 @@ app.get("/auth/callback/google", async (req, res) => {
     }
 
     const token = crypto.randomBytes(32).toString("hex");
-    const params = new URLSearchParams({ success: "true", token, userId: key, platform: "google" });
-    return res.redirect(`${APP_SCHEME}://social-callback?${params.toString()}`);
+    const savedUser = userStore.get(key);
+    const authData = { success: "true", token, userId: key, platform: "google", name: savedUser?.name || name || "", email: key };
+    // Return HTML page that works on both mobile (deep link) and web (localStorage/polling)
+    return res.send(buildAuthRedirect(authData));
 
   } catch (err) {
     console.error("Google login callback error:", err.response?.data || err.message);
-    return res.redirect(`${APP_SCHEME}://social-callback?error=server_error&platform=google`);
+    return res.send(buildAuthRedirect({ error: "Google login failed. Please try again.", platform: "google" }, true));
   }
 });
 
@@ -1627,14 +1629,102 @@ app.get("/auth/callback/facebook", async (req, res) => {
     }
 
     const token = crypto.randomBytes(32).toString("hex");
-    const params = new URLSearchParams({ success: "true", token, userId: key, platform: "facebook" });
-    return res.redirect(`${APP_SCHEME}://social-callback?${params.toString()}`);
+    socialStore.set(`${key}:facebook`, { accessToken, accountName: name || "Facebook User", handle: id, followers: "", profilePic: "", connectedAt: new Date().toISOString() });
+    const savedUser = userStore.get(key);
+    const authData = { success: "true", token, userId: key, platform: "facebook", name: savedUser?.name || name || "", email: key, facebookConnected: "true" };
+    return res.send(buildAuthRedirect(authData));
 
   } catch (err) {
     console.error("Facebook login callback error:", err.response?.data || err.message);
-    return res.redirect(`${APP_SCHEME}://social-callback?error=server_error&platform=facebook`);
+    return res.send(buildAuthRedirect({ error: "Facebook login failed. Please try again.", platform: "facebook" }, true));
   }
 });
+
+
+// ── WEB-SAFE AUTH CALLBACK ────────────────────────────────────────────────────
+// Stores auth result in server memory for Flutter Web polling
+const webAuthStore = new Map(); // sessionId → { token, userId, name, email, platform, ts }
+
+// GET /auth/status/:sessionId — Flutter Web polls this after OAuth
+app.get("/auth/status/:sessionId", (req, res) => {
+  const { sessionId } = req.params;
+  const result = webAuthStore.get(sessionId);
+  if (!result) return res.json({ pending: true });
+  // Clean up after retrieval
+  webAuthStore.delete(sessionId);
+  return res.json({ pending: false, ...result });
+});
+
+// Helper: build web-safe redirect that works on BOTH mobile (deep link) and web (polling)
+function buildAuthRedirect(params, isError = false) {
+  const sessionId = crypto.randomBytes(16).toString("hex");
+  const paramsStr = new URLSearchParams(params).toString();
+
+  if (!isError) {
+    // Store for web polling
+    webAuthStore.set(sessionId, params);
+    // Auto-expire after 5 minutes
+    setTimeout(() => webAuthStore.delete(sessionId), 300000);
+  }
+
+  const deepLink = `${APP_SCHEME}://social-callback?${paramsStr}`;
+  const pollUrl = `${BACKEND_URL}/auth/status/${sessionId}`;
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ViralMate — ${isError ? 'Login Failed' : 'Login Successful'}</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#080810;color:#fff;height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:24px;text-align:center}
+    .icon{font-size:48px;margin-bottom:8px}
+    h2{font-size:20px;font-weight:700}
+    p{color:#9CA3AF;font-size:14px;line-height:1.5;max-width:300px}
+    .badge{background:linear-gradient(135deg,#6366F1,#8B5CF6);border-radius:20px;padding:6px 16px;font-size:13px;font-weight:700;display:inline-block;margin-top:8px}
+    .spinner{width:32px;height:32px;border:3px solid rgba(99,102,241,0.3);border-top:3px solid #6366F1;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  ${isError
+    ? `<div class="icon">❌</div><h2>Login Failed</h2><p>${params.error || 'Authentication failed. Please try again.'}</p>`
+    : `<div class="spinner"></div><h2>${params.name ? 'Welcome, ' + params.name.split(' ')[0] + '!' : 'Login Successful!'}</h2><p>Returning you to ViralMate...</p><div class="badge">⚡ ViralMate</div>`
+  }
+  <script>
+    const deepLink = "${deepLink.replace(/"/g, '\"')}";
+    const pollUrl = "${pollUrl}";
+    const isError = ${isError};
+
+    // Try to open deep link (works on mobile)
+    try { window.location.href = deepLink; } catch(e) {}
+
+    if (!isError) {
+      // Signal to any open ViralMate web tabs via BroadcastChannel
+      try {
+        const bc = new BroadcastChannel('viralmate_auth');
+        bc.postMessage({ type: 'AUTH_SUCCESS', pollUrl, data: ${JSON.stringify(params)} });
+        bc.close();
+      } catch(e) {}
+
+      // Also store in localStorage for web fallback
+      try {
+        localStorage.setItem('viralmate_pending_auth', JSON.stringify({
+          pollUrl, data: ${JSON.stringify(params)}, ts: Date.now()
+        }));
+      } catch(e) {}
+    }
+
+    // Close window after 3 seconds (mobile browser tab)
+    setTimeout(() => {
+      try { window.close(); } catch(e) {}
+      document.body.innerHTML = '<div style="padding:24px;text-align:center;color:#9CA3AF;font-size:14px">You can close this tab and return to ViralMate.</div>';
+    }, 3000);
+  </script>
+</body>
+</html>`;
+}
 
 // ── 404 & GLOBAL ERROR HANDLER ────────────────────────────────────────────────
 app.use((_, res) => res.status(404).json({ error: "Route not found." }));
