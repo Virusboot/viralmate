@@ -31,6 +31,8 @@ const otpStore    = new Map(); // "email:purpose" → { otp, expiresAt, verified
 const userStore   = new Map(); // email → { name, password, verified, plan }
 const oauthStates = new Map(); // stateToken → { platform, userId, createdAt }
 const socialStore = new Map(); // "userId:platform" → { accessToken, accountName, ... }
+const postStore = new Map(); // ✅ 
+
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 const hashPass = p =>
@@ -591,10 +593,11 @@ app.post("/login", (req, res) => {
 
   const token = crypto.randomBytes(32).toString("hex");
   return res.json({
-    success: true,
-    token,
-    user: { name: user.name, email: key, plan: user.plan || "free" },
-  });
+  success: true,
+  token,
+  userId: key,
+  user: { name: user.name, email: key, plan: user.plan || "free" },
+});
 });
 
 // POST /verify-otp
@@ -739,8 +742,8 @@ app.post("/social/auth-url", (req, res) => {
     // Instagram requires Facebook Login + Business Account linked to Facebook Page
     // Regular personal Instagram accounts cannot be connected via API
     const scope = platform === "instagram"
-      ? "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,business_management"
-      : "pages_manage_posts,pages_read_engagement,pages_show_list,public_profile,email";
+  ? "instagram_basic,instagram_content_publish,pages_read_user_content,pages_manage_engagement,business_management"
+  : "pages_manage_posts,pages_read_user_content,pages_manage_engagement,public_profile,email";
     authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code&auth_type=rerequest`;
 
   } else if (platform === "youtube") {
@@ -974,6 +977,57 @@ app.post("/social/status", (req, res) => {
       : { connected: false };
   }
   return res.json({ success: true, accounts: result });
+});
+
+// CREATE post
+app.post('/schedule/create', (req, res) => {
+  const { userId, platform, caption, scheduledAt } = req.body;
+
+  if (!userId || !platform || !caption) {
+    return res.status(400).json({ error: "Missing fields" });
+  }
+
+  const id = 'post_' + Date.now();
+
+  const newPost = {
+    id,
+    userId,
+    platform,
+    caption,
+    status: 'scheduled',
+    scheduledAt: scheduledAt || new Date().toISOString(),
+    views: 0,
+    likes: 0,
+  };
+
+  postStore.set(id, newPost);
+
+  res.json({ success: true, post: newPost });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCHEDULER APIs
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+// GET all scheduled posts
+app.post('/schedule/list', (req, res) => {
+  const { userId } = req.body;
+
+  const posts = Array.from(postStore.values())
+    .filter(p => p.userId === userId)
+    .sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+
+  res.json({ success: true, posts });
+});
+
+// DELETE post
+app.post('/schedule/delete', (req, res) => {
+  const { postId } = req.body;
+
+  postStore.delete(postId);
+
+  res.json({ success: true });
 });
 
 // POST /social/disconnect — disconnect a platform
@@ -1452,11 +1506,14 @@ app.post("/auth/google", async (req, res) => {
     const token = crypto.randomBytes(32).toString('hex');
     const userId = payload.sub || email;
 
-    return res.json({
-      success: true, token,
-      user: { name, email, plan: userStore.get(email)?.plan || 'free' },
-      userId,
-    });
+    const deepLink = `${APP_SCHEME}://social-callback?success=true&platform=google&youtubeConnected=true&userId=${userId}`;
+return res.json({
+  success: true,
+  token,
+  user: { name, email, plan: userStore.get(email)?.plan || 'free' },
+  userId,
+  deepLink // optional but useful
+});
   } catch (err) {
     console.error("Google login error:", err.response?.data || err.message);
     return res.status(401).json({ error: "Google authentication failed. Please try again." });
