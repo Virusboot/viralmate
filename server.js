@@ -1576,7 +1576,7 @@ app.post("/auth/login-url", (req, res) => {
         setup: "Set GOOGLE_LOGIN_CLIENT_ID on Railway (same Client ID, add /auth/callback/google to redirect URIs in Google Console).",
       });
     }
-    const redirectUri = encodeURIComponent(`${BACKEND_URL}/auth/callback/google`);
+    const redirectUri = encodeURIComponent(`${BACKEND_URL}/auth/google/callback`);
     // Use ONLY basic profile scopes - no YouTube - avoids scary permission warnings
     const scope = encodeURIComponent("openid email profile");
     authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${googleClientId}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code&prompt=select_account`;
@@ -1598,7 +1598,7 @@ app.post("/auth/login-url", (req, res) => {
 });
 
 // ── GOOGLE LOGIN CALLBACK (FIX) ─────────────────────────────
-app.get("/auth/callback/google", async (req, res) => {
+app.get("/auth/google/callback", async (req, res) => {
   const { code, state, error } = req.query;
 
   if (error || !code || !state) {
@@ -1617,7 +1617,7 @@ app.get("/auth/callback/google", async (req, res) => {
       code,
       client_id: process.env.GOOGLE_LOGIN_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID,
       client_secret: process.env.GOOGLE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET,
-      redirect_uri: `${BACKEND_URL}/auth/callback/google`,
+      redirect_uri: `${BACKEND_URL}/auth/google/callback`,
       grant_type: "authorization_code",
     });
 
@@ -1656,7 +1656,7 @@ app.get("/auth/callback/google", async (req, res) => {
   }
 });
 
-// GET /auth/callback/google — handles Google login OAuth callback
+// GET /auth/google/callback — handles Google login OAuth callback
 app.get("/auth/callback/google", async (req, res) => {
   const { code, state, error } = req.query;
   if (error || !code || !state)
