@@ -563,12 +563,20 @@ app.post("/register", async (req, res) => {
   });
 
   const otp = genOtp();
-  if (otpStore.has(`${key}:verify`)) {
+
+if (otpStore.has(`${key}:verify`)) {
   return res.status(429).json({ error: "Wait before requesting OTP again" });
 }
 
-  try {
-    await sendOtp(key, otp, "verify");
+// ✅ ADD THIS BLOCK
+otpStore.set(`${key}:verify`, {
+  otp,
+  expiresAt: Date.now() + 600000,
+  verified: false
+});
+
+try {
+  await sendOtp(key, otp, "verify");
     return res.json({ success: true, message: "OTP sent. Please check your email." });
   } catch (err) {
     console.error("Email error:", err.message);
