@@ -644,7 +644,7 @@ app.post("/forgot-password", async (req, res) => {
 });
 
 // POST /reset-password
-app.post("/reset-password", (req, res) => {
+app.post("/reset-password", async (req, res) => {
   const { email, otp, newPassword } = req.body;
   if (!email || !otp || !newPassword)
     return res.status(400).json({ error: "All fields are required." });
