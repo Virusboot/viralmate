@@ -3,6 +3,10 @@ import cors    from "cors";
 import axios   from "axios";
 import crypto  from "crypto";
 import { Resend } from "resend";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
+
+const JWT_SECRET = process.env.JWT_SECRET || "viralmate_secret";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ViralMate Backend v3.0 — Final Merged
@@ -35,10 +39,14 @@ const postStore = new Map(); // ✅
 
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
-const hashPass = p =>
-  crypto.createHash("sha256")
-    .update(p + (process.env.PASSWORD_SALT || "viralmate_2024"))
-    .digest("hex");
+
+const hashPass = async (p) => {
+  return await bcrypt.hash(p, 10);
+};
+
+const comparePass = async (p, hash) => {
+  return await bcrypt.compare(p, hash);
+};
 
 const genOtp     = () => Math.floor(100000 + Math.random() * 900000).toString();
 const genState   = () => crypto.randomBytes(24).toString("hex");
@@ -549,13 +557,15 @@ app.post("/register", async (req, res) => {
 
   userStore.set(key, {
     name: name.trim(),
-    password: hashPass(password),
+    password: await hashPass(password),
     verified: false,
     plan: "free",
   });
 
   const otp = genOtp();
-  otpStore.set(`${key}:verify`, { otp, expiresAt: Date.now() + 600000 });
+  if (otpStore.has(`${key}:verify`)) {
+  return res.status(429).json({ error: "Wait before requesting OTP again" });
+}
 
   try {
     await sendOtp(key, otp, "verify");
@@ -575,34 +585,10 @@ app.post("/register", async (req, res) => {
   }
 });
 
-// POST /login
-app.post("/login", (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password)
-    return res.status(400).json({ error: "Email and password are required." });
-
-  const key  = email.trim().toLowerCase();
-  if (!validEmail(key))
-    return res.status(400).json({ error: "Please enter a valid email address." });
-
-  const user = userStore.get(key);
-  if (!user || user.password !== hashPass(password))
-    return res.status(401).json({ error: "Incorrect email or password." });
-  if (!user.verified)
-    return res.status(403).json({ error: "Please verify your email before signing in." });
-
-  const token = crypto.randomBytes(32).toString("hex");
-  return res.json({
-  success: true,
-  token,
-  userId: key,
-  user: { name: user.name, email: key, plan: user.plan || "free" },
-});
-});
-
 // POST /verify-otp
-app.post("/verify-otp", (req, res) => {
+ app.post("/verify-otp", (req, res) => {
   const { email, otp, purpose } = req.body;
+
   if (!email || !otp || !purpose)
     return res.status(400).json({ error: "Email, OTP, and purpose are required." });
 
@@ -610,36 +596,31 @@ app.post("/verify-otp", (req, res) => {
   const sk  = `${key}:${purpose}`;
   const rec = otpStore.get(sk);
 
-  if (!rec)
-    return res.status(400).json({ error: "OTP expired or invalid. Please request a new one." });
+  if (!rec) return res.status(400).json({ error: "OTP expired" });
   if (Date.now() > rec.expiresAt) {
     otpStore.delete(sk);
-    return res.status(400).json({ error: "OTP has expired. Please request a new one." });
+    return res.status(400).json({ error: "OTP expired" });
   }
+
   if (rec.otp !== String(otp).trim())
-    return res.status(400).json({ error: "Invalid OTP. Please try again." });
+    return res.status(400).json({ error: "Invalid OTP" });
 
   if (purpose === "verify") {
     const u = userStore.get(key);
     if (u) userStore.set(key, { ...u, verified: true });
-    otpStore.delete(sk);
-    // Return token + userId so Flutter can save session immediately
-    const token = crypto.randomBytes(32).toString("hex");
-    return res.json({
-      success: true,
-      message: "Email verified successfully!",
-      token,
-      userId: key,
-      user: { name: u?.name || "", email: key, plan: u?.plan || "free" }
-    });
+
+    const token = jwt.sign({ userId: key }, JWT_SECRET, { expiresIn: "7d" });
+
+    return res.json({ success: true, token, userId: key });
   }
+
   if (purpose === "reset") {
     otpStore.set(sk, { ...rec, verified: true });
-    return res.json({ success: true, message: "OTP verified. You can now set a new password." });
+    return res.json({ success: true });
   }
-  return res.status(400).json({ error: "Invalid purpose." });
-});
 
+  return res.status(400).json({ error: "Invalid purpose" });
+});
 // POST /forgot-password
 app.post("/forgot-password", async (req, res) => {
   const key = req.body.email?.trim().toLowerCase();
@@ -682,7 +663,7 @@ app.post("/reset-password", (req, res) => {
   const user = userStore.get(key);
   if (!user) return res.status(404).json({ error: "User not found." });
 
-  userStore.set(key, { ...user, password: hashPass(newPassword) });
+  userStore.set(key, { ...user, password: await hashPass(newPassword) });
   otpStore.delete(sk);
   return res.json({ success: true, message: "Password reset successfully!" });
 });
@@ -980,8 +961,9 @@ app.post("/social/status", (req, res) => {
 });
 
 // CREATE post
-app.post('/schedule/create', (req, res) => {
-  const { userId, platform, caption, scheduledAt } = req.body;
+app.post('/schedule/create', authMiddleware, (req, res) => {
+  const userId = req.userId;
+  const { platform, caption, scheduledAt } = req.body;
 
   if (!userId || !platform || !caption) {
     return res.status(400).json({ error: "Missing fields" });
@@ -1011,8 +993,8 @@ app.post('/schedule/create', (req, res) => {
 
 
 // GET all scheduled posts
-app.post('/schedule/list', (req, res) => {
-  const { userId } = req.body;
+app.post('/schedule/list', authMiddleware, (req, res) => {
+  const userId = req.userId;
 
   const posts = Array.from(postStore.values())
     .filter(p => p.userId === userId)
@@ -1022,21 +1004,23 @@ app.post('/schedule/list', (req, res) => {
 });
 
 // DELETE post
-app.post('/schedule/delete', (req, res) => {
+app.post('/schedule/delete', authMiddleware, (req, res) => {
   const { postId } = req.body;
+  const userId = req.userId;
+
+  if (!postId) {
+    return res.status(400).json({ error: "postId required" });
+  }
+
+  const post = postStore.get(postId);
+
+  if (!post || post.userId !== userId) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
 
   postStore.delete(postId);
 
   res.json({ success: true });
-});
-
-// POST /social/disconnect — disconnect a platform
-app.post("/social/disconnect", (req, res) => {
-  const { platform, userId } = req.body;
-  if (!platform || !userId)
-    return res.status(400).json({ error: "Platform and userId are required." });
-  socialStore.delete(`${userId}:${platform}`);
-  return res.json({ success: true });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1139,44 +1123,67 @@ app.get("/delete", (_, res) => {
 });
 
 // POST /delete-account — actual account deletion endpoint
-app.post("/delete-account", (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: "Email required." });
-  const key = email.trim().toLowerCase();
-  if (userStore.has(key)) {
-    userStore.delete(key);
-    // Delete all social connections
+
+  function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+if (!authHeader) return res.status(401).json({ error: "No token" });
+
+const token = authHeader.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "No token" });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.userId = decoded.userId;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
+
+app.post("/delete-account", authMiddleware, (req, res) => {
+  const userId = req.userId;
+
+  if (userStore.has(userId)) {
+    for (const [id, post] of postStore.entries()) {
+  if (post.userId === userId) {
+    postStore.delete(id);
+  }
+}
+
+    // delete social data
     for (const p of ["instagram", "facebook", "youtube"]) {
-      socialStore.delete(`${key}:${p}`);
+      socialStore.delete(`${userId}:${p}`);
     }
   }
-  return res.json({ success: true, message: "Account and all data deleted successfully." });
+
+  return res.json({ success: true, message: "Account deleted successfully" });
 });
 
 
 // ── CHANGE PASSWORD ───────────────────────────────────────────────────────────
-app.post("/change-password", (req, res) => {
+app.post("/change-password", authMiddleware, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
+
   if (!currentPassword || !newPassword)
-    return res.status(400).json({ error: "Both fields are required." });
+    return res.status(400).json({ error: "All fields are required." });
+
   if (newPassword.length < 6)
-    return res.status(400).json({ error: "New password must be at least 6 characters." });
+    return res.status(400).json({ error: "Password must be at least 6 characters." });
 
-  // Find user by token from Authorization header
-  const auth = req.headers.authorization;
-  if (!auth) return res.status(401).json({ error: "Not authenticated." });
+  const user = userStore.get(req.userId);
 
-  // Verify current password — find user who matches this password
-  const hashedCurrent = hashPass(currentPassword);
-  let foundEmail = null;
-  for (const [email, user] of userStore.entries()) {
-    if (user.password === hashedCurrent) { foundEmail = email; break; }
-  }
-  if (!foundEmail) return res.status(401).json({ error: "Current password is incorrect." });
+  if (!user)
+    return res.status(404).json({ error: "User not found" });
 
-  const user = userStore.get(foundEmail);
-  userStore.set(foundEmail, { ...user, password: hashPass(newPassword) });
-  return res.json({ success: true, message: "Password updated successfully." });
+  if (!(await comparePass(currentPassword, user.password)))
+    return res.status(401).json({ error: "Wrong password" });
+
+  userStore.set(req.userId, {
+    ...user,
+    password: await hashPass(newPassword),
+  });
+
+  res.json({ success: true });
 });
 
 // ── USER PROFILE UPDATE ───────────────────────────────────────────────────────
@@ -1497,13 +1504,17 @@ app.post("/auth/google", async (req, res) => {
 
     // Auto-create account if not exists
     if (!userStore.has(email)) {
-      userStore.set(email, { name, password: '', verified: true, plan: 'free', googleId: payload.sub });
+      userStore.set(email, { name, password: null, verified: true, plan: 'free', googleId: payload.sub });
     } else {
       const u = userStore.get(email);
       userStore.set(email, { ...u, verified: true });
     }
 
-    const token = crypto.randomBytes(32).toString('hex');
+    const token = jwt.sign(
+  { userId: email },
+  JWT_SECRET,
+  { expiresIn: "7d" }
+);
     const userId = payload.sub || email;
 
     const deepLink = `${APP_SCHEME}://social-callback?success=true&platform=google&youtubeConnected=true&userId=${userId}`;
@@ -1523,239 +1534,48 @@ return res.json({
 // POST /auth/facebook — verify Facebook access token
 app.post("/auth/facebook", async (req, res) => {
   const { accessToken } = req.body;
-  if (!accessToken) return res.status(400).json({ error: "accessToken is required." });
+
+  if (!accessToken) {
+    return res.status(400).json({ error: "accessToken is required." });
+  }
 
   try {
     const r = await axios.get(
-      `https://graph.facebook.com/me?fields=id,name,email&access_token=${accessToken}`,
-      { timeout: 8000 }
+      `https://graph.facebook.com/me?fields=id,name,email&access_token=${accessToken}`
     );
+
     const profile = r.data;
     const email = profile.email || `fb_${profile.id}@viralmate.app`;
-    const name  = profile.name || 'Facebook User';
-
-    if (!userStore.has(email)) {
-      userStore.set(email, { name, password: '', verified: true, plan: 'free', facebookId: profile.id });
-    } else {
-      const u = userStore.get(email);
-      userStore.set(email, { ...u, verified: true });
-    }
-
-    const token = crypto.randomBytes(32).toString('hex');
-
-    return res.json({
-      success: true, token,
-      user: { name, email, plan: userStore.get(email)?.plan || 'free' },
-      userId: profile.id,
-    });
-  } catch (err) {
-    console.error("Facebook login error:", err.response?.data || err.message);
-    return res.status(401).json({ error: "Facebook authentication failed. Please try again." });
-  }
-});
-
-
-// POST /auth/login-url — Generate OAuth URL for Google/Facebook LOGIN (not just social connect)
-// Used by login screen Google + Facebook buttons
-app.post("/auth/login-url", (req, res) => {
-  const { platform } = req.body;
-  if (!platform) return res.status(400).json({ error: "Platform is required." });
-
-  const state = genState();
-  oauthStates.set(state, { platform, userId: "login", createdAt: Date.now() });
-  setTimeout(() => oauthStates.delete(state), 600000);
-
-  let authUrl = "";
-
-  if (platform === "google") {
-    // Use GOOGLE_LOGIN_CLIENT_ID if set, else fall back to YOUTUBE_CLIENT_ID
-    const googleClientId = process.env.GOOGLE_LOGIN_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
-    if (!googleClientId) {
-      return res.status(503).json({
-        error: "Google login is not configured yet.",
-        setup: "Set GOOGLE_LOGIN_CLIENT_ID on Railway (same Client ID, add /auth/callback/google to redirect URIs in Google Console).",
-      });
-    }
-    const redirectUri = encodeURIComponent(`${BACKEND_URL}/auth/google/callback`);
-    // Use ONLY basic profile scopes - no YouTube - avoids scary permission warnings
-    const scope = encodeURIComponent("openid email profile");
-    authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${googleClientId}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code&prompt=select_account`;
-
-  } else if (platform === "facebook") {
-    if (!process.env.FACEBOOK_APP_ID) {
-      return res.status(503).json({
-        error: "Facebook login is not configured yet.",
-        setup: "Set FACEBOOK_APP_ID and FACEBOOK_APP_SECRET on Railway.",
-      });
-    }
-    const redirectUri = encodeURIComponent(`${BACKEND_URL}/auth/callback/facebook`);
-    authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${redirectUri}&scope=email,public_profile&state=${state}&response_type=code`;
-  } else {
-    return res.status(400).json({ error: "Unsupported platform for login." });
-  }
-
-  return res.json({ success: true, authUrl });
-});
-
-// ── GOOGLE LOGIN CALLBACK (FIX) ─────────────────────────────
-app.get("/auth/google/callback", async (req, res) => {
-  const { code, state, error } = req.query;
-
-  if (error || !code || !state) {
-    return res.redirect(`${APP_SCHEME}://login?error=google_failed`);
-  }
-
-  const sd = oauthStates.get(state);
-  if (!sd) {
-    return res.redirect(`${APP_SCHEME}://login?error=invalid_state`);
-  }
-
-  oauthStates.delete(state);
-
-  try {
-    const tokenRes = await axios.post("https://oauth2.googleapis.com/token", {
-      code,
-      client_id: process.env.GOOGLE_LOGIN_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET,
-      redirect_uri: `${BACKEND_URL}/auth/google/callback`,
-      grant_type: "authorization_code",
-    });
-
-    const { access_token } = tokenRes.data;
-
-    const userInfo = await axios.get("https://www.googleapis.com/oauth2/v2/userinfo", {
-      headers: { Authorization: `Bearer ${access_token}` },
-    });
-
-    const email = userInfo.data.email.toLowerCase();
-    const name = userInfo.data.name || "Google User";
+    const name  = profile.name || "Facebook User";
 
     if (!userStore.has(email)) {
       userStore.set(email, {
         name,
-        password: "",
+        password: null,
         verified: true,
-        plan: "free",
+        plan: 'free',
+        facebookId: profile.id
       });
     }
 
-    const token = crypto.randomBytes(32).toString("hex");
+    const token = jwt.sign(
+      { userId: email },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
-    const params = new URLSearchParams({
-      success: "true",
-      email,
-      name,
+    res.json({
+      success: true,
       token,
+      user: { name, email, plan: 'free' },
+      userId: profile.id
     });
-
-    return res.redirect(`${APP_SCHEME}://login-success?${params.toString()}`);
 
   } catch (err) {
-    console.error("Google callback error:", err.response?.data || err.message);
-    return res.redirect(`${APP_SCHEME}://login?error=google_failed`);
+    console.error("Facebook login error:", err.message);
+    res.status(401).json({ error: "Facebook authentication failed." });
   }
 });
-
-// GET /auth/google/callback — handles Google login OAuth callback
-app.get("/auth/callback/google", async (req, res) => {
-  const { code, state, error } = req.query;
-  if (error || !code || !state)
-    return res.redirect(`${APP_SCHEME}://social-callback?error=access_denied&platform=google`);
-
-  const sd = oauthStates.get(state);
-  if (!sd) return res.redirect(`${APP_SCHEME}://social-callback?error=invalid_state&platform=google`);
-  oauthStates.delete(state);
-
-  try {
-    const googleClientId = process.env.GOOGLE_LOGIN_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
-    const googleClientSecret = process.env.GOOGLE_LOGIN_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
-    const tokenRes = await axios.post("https://oauth2.googleapis.com/token", {
-      code,
-      client_id: googleClientId,
-      client_secret: googleClientSecret,
-      redirect_uri: `${BACKEND_URL}/auth/callback/google`,
-      grant_type: "authorization_code",
-    }, { timeout: 10000 });
-
-    const { access_token } = tokenRes.data;
-
-    // Get Google profile
-    const profileRes = await axios.get("https://www.googleapis.com/oauth2/v2/userinfo", {
-      headers: { Authorization: `Bearer ${access_token}` },
-      timeout: 8000,
-    });
-
-    const { email, name, id } = profileRes.data;
-    const key = email.toLowerCase();
-
-    if (!userStore.has(key)) {
-      userStore.set(key, { name: name || email, password: "", verified: true, plan: "free" });
-    } else {
-      const u = userStore.get(key);
-      userStore.set(key, { ...u, verified: true });
-    }
-
-    const token = crypto.randomBytes(32).toString("hex");
-    const savedUser = userStore.get(key);
-    const authData = { success: "true", token, userId: key, platform: "google", name: savedUser?.name || name || "", email: key };
-    // Return HTML page that works on both mobile (deep link) and web (localStorage/polling)
-    return res.send(buildAuthRedirect(authData));
-
-  } catch (err) {
-    console.error("Google login callback error:", err.response?.data || err.message);
-    return res.send(buildAuthRedirect({ error: "Google login failed. Please try again.", platform: "google" }, true));
-  }
-});
-
-// GET /auth/callback/facebook — handles Facebook login OAuth callback
-app.get("/auth/callback/facebook", async (req, res) => {
-  const { code, state, error } = req.query;
-  if (error || !code || !state)
-    return res.redirect(`${APP_SCHEME}://social-callback?error=access_denied&platform=facebook`);
-
-  const sd = oauthStates.get(state);
-  if (!sd) return res.redirect(`${APP_SCHEME}://social-callback?error=invalid_state&platform=facebook`);
-  oauthStates.delete(state);
-
-  try {
-    const tokenRes = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", {
-      params: {
-        client_id: process.env.FACEBOOK_APP_ID,
-        client_secret: process.env.FACEBOOK_APP_SECRET,
-        redirect_uri: `${BACKEND_URL}/auth/callback/facebook`,
-        code,
-      },
-      timeout: 10000,
-    });
-
-    const accessToken = tokenRes.data.access_token;
-    const meRes = await axios.get("https://graph.facebook.com/v19.0/me", {
-      params: { fields: "id,name,email", access_token: accessToken },
-      timeout: 8000,
-    });
-
-    const { email, name, id } = meRes.data;
-    const key = (email || `fb_${id}@viralmate.app`).toLowerCase();
-
-    if (!userStore.has(key)) {
-      userStore.set(key, { name: name || "Facebook User", password: "", verified: true, plan: "free" });
-    } else {
-      const u = userStore.get(key);
-      userStore.set(key, { ...u, verified: true });
-    }
-
-    const token = crypto.randomBytes(32).toString("hex");
-    socialStore.set(`${key}:facebook`, { accessToken, accountName: name || "Facebook User", handle: id, followers: "", profilePic: "", connectedAt: new Date().toISOString() });
-    const savedUser = userStore.get(key);
-    const authData = { success: "true", token, userId: key, platform: "facebook", name: savedUser?.name || name || "", email: key, facebookConnected: "true" };
-    return res.send(buildAuthRedirect(authData));
-
-  } catch (err) {
-    console.error("Facebook login callback error:", err.response?.data || err.message);
-    return res.send(buildAuthRedirect({ error: "Facebook login failed. Please try again.", platform: "facebook" }, true));
-  }
-});
-
 
 // ── WEB-SAFE AUTH CALLBACK ────────────────────────────────────────────────────
 // Stores auth result in server memory for Flutter Web polling
