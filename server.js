@@ -1178,11 +1178,12 @@ app.post("/change-password", authMiddleware, async (req, res) => {
   if (!(await comparePass(currentPassword, user.password)))
     return res.status(401).json({ error: "Wrong password" });
 
-  userStore.set(req.userId, {
-    ...user,
-    password: await hashPass(newPassword),
-  });
+  const hashed = await hashPass(newPassword);
 
+userStore.set(req.userId, {
+  ...user,
+  password: hashed,
+});
   res.json({ success: true });
 });
 
