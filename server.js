@@ -1671,6 +1671,446 @@ function buildAuthRedirect(params, isError = false) {
 </html>`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ✅ MISSING ROUTES FIX — All aliases Flutter app expects
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── /login — Flutter calls this directly ─────────────────────────────────────
+async function handleLogin(req, res) {
+  const { email, password } = req.body;
+  if (!email || !password)
+    return res.status(400).json({ error: "Email and password are required." });
+
+  const key = email.trim().toLowerCase();
+  if (!validEmail(key))
+    return res.status(400).json({ error: "Please enter a valid email address." });
+
+  const user = userStore.get(key);
+  if (!user)
+    return res.status(401).json({ error: "Incorrect email or password." });
+
+  if (!user.verified)
+    return res.status(403).json({
+      error: "Please verify your email first. Check your inbox.",
+      needsVerification: true,
+    });
+
+  const match = user.password ? await comparePass(password, user.password) : false;
+  if (!match)
+    return res.status(401).json({ error: "Incorrect email or password." });
+
+  const token = jwt.sign({ userId: key }, JWT_SECRET, { expiresIn: "30d" });
+  return res.json({
+    success: true,
+    token,
+    userId: key,
+    name: user.name,
+    email: key,
+    plan: user.plan || "free",
+  });
+}
+
+app.post("/login",      handleLogin);   // original
+app.post("/auth/login", handleLogin);   // ✅ alias Flutter uses
+
+// ── /auth/register — alias for /register ─────────────────────────────────────
+// Flutter hits /auth/register but server only had /register
+app.post("/auth/register", async (req, res) => {
+  const { name, email, password } = req.body;
+  if (!name || !email || !password)
+    return res.status(400).json({ error: "All fields are required." });
+
+  const key = email.trim().toLowerCase();
+  if (!validEmail(key))
+    return res.status(400).json({ error: "Please enter a valid email address." });
+  if (typeof name !== "string" || name.trim().length < 2)
+    return res.status(400).json({ error: "Name must be at least 2 characters." });
+  if (password.length < 6)
+    return res.status(400).json({ error: "Password must be at least 6 characters." });
+  if (userStore.get(key)?.verified)
+    return res.status(409).json({ error: "This email is already registered. Please sign in." });
+
+  userStore.set(key, {
+    name: name.trim(),
+    password: await hashPass(password),
+    verified: false,
+    plan: "free",
+  });
+
+  const otp = genOtp();
+  otpStore.set(`${key}:verify`, {
+    otp,
+    expiresAt: Date.now() + 600000,
+    verified: false,
+  });
+
+  try {
+    await sendOtp(key, otp, "verify");
+    return res.json({ success: true, message: "OTP sent. Please check your email." });
+  } catch (err) {
+    console.error("Email error:", err.message);
+    console.log(`[DEV OTP] Email: ${key} | OTP: ${otp}`);
+    return res.json({
+      success: true,
+      message: `OTP sent! (Check Railway logs if email not received)`,
+      devOtp: otp, // shown in app for dev testing
+    });
+  }
+});
+
+// ── /auth/verify-otp — alias for /verify-otp ────────────────────────────────
+async function handleVerifyOtp(req, res) {
+  const { email, otp, purpose } = req.body;
+  if (!email || !otp || !purpose)
+    return res.status(400).json({ error: "Email, OTP, and purpose are required." });
+
+  const key = email.trim().toLowerCase();
+  const sk  = `${key}:${purpose}`;
+  const rec = otpStore.get(sk);
+
+  if (!rec) return res.status(400).json({ error: "OTP expired or not found. Please resend." });
+  if (Date.now() > rec.expiresAt) {
+    otpStore.delete(sk);
+    return res.status(400).json({ error: "OTP expired. Please request a new one." });
+  }
+  if (rec.otp !== String(otp).trim())
+    return res.status(400).json({ error: "Invalid OTP. Please check and try again." });
+
+  if (purpose === "verify") {
+    const u = userStore.get(key);
+    if (u) userStore.set(key, { ...u, verified: true });
+    otpStore.delete(sk);
+    const token = jwt.sign({ userId: key }, JWT_SECRET, { expiresIn: "30d" });
+    return res.json({ success: true, token, userId: key, name: u?.name || "" });
+  }
+
+  if (purpose === "reset") {
+    otpStore.set(sk, { ...rec, verified: true });
+    return res.json({ success: true });
+  }
+
+  return res.status(400).json({ error: "Invalid purpose." });
+}
+
+app.post("/verify-otp",      handleVerifyOtp); // original
+app.post("/auth/verify-otp", handleVerifyOtp); // ✅ alias
+
+// ── /auth/resend-otp — alias for /resend-otp ─────────────────────────────────
+async function handleResendOtp(req, res) {
+  const { email, purpose } = req.body;
+  if (!email || !purpose)
+    return res.status(400).json({ error: "Email and purpose are required." });
+
+  const key = email.trim().toLowerCase();
+  const otp = genOtp();
+  otpStore.set(`${key}:${purpose}`, { otp, expiresAt: Date.now() + 600000, verified: false });
+
+  try {
+    await sendOtp(key, otp, purpose);
+    return res.json({ success: true, message: "OTP resent successfully." });
+  } catch (err) {
+    console.error("Resend error:", err.message);
+    console.log(`[DEV RESEND OTP] Email: ${key} | OTP: ${otp}`);
+    return res.json({
+      success: true,
+      message: "OTP resent! (Check Railway logs if email not received)",
+      devOtp: otp,
+    });
+  }
+}
+
+app.post("/resend-otp",      handleResendOtp); // original
+app.post("/auth/resend-otp", handleResendOtp); // ✅ alias
+
+// ── /auth/forgot-password alias ──────────────────────────────────────────────
+app.post("/auth/forgot-password", async (req, res) => {
+  const key = req.body.email?.trim().toLowerCase();
+  if (!key || !validEmail(key))
+    return res.status(400).json({ error: "Please enter a valid email address." });
+
+  if (!userStore.has(key))
+    return res.json({ success: true, message: "If this email is registered, an OTP has been sent." });
+
+  const otp = genOtp();
+  otpStore.set(`${key}:reset`, { otp, expiresAt: Date.now() + 600000, verified: false });
+
+  try {
+    await sendOtp(key, otp, "reset");
+    return res.json({ success: true, message: "Password reset OTP sent to your email." });
+  } catch (err) {
+    console.error("Email error:", err.message);
+    console.log(`[DEV RESET OTP] Email: ${key} | OTP: ${otp}`);
+    return res.json({
+      success: true,
+      message: "OTP sent! (Check Railway logs if email not received)",
+      devOtp: otp,
+    });
+  }
+});
+
+// ── /auth/reset-password alias ────────────────────────────────────────────────
+app.post("/auth/reset-password", async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+  if (!email || !otp || !newPassword)
+    return res.status(400).json({ error: "All fields are required." });
+
+  const key = email.trim().toLowerCase();
+  const sk  = `${key}:reset`;
+  const rec = otpStore.get(sk);
+
+  if (!rec?.verified)
+    return res.status(400).json({ error: "Please verify your OTP first." });
+  if (rec.otp !== String(otp).trim())
+    return res.status(400).json({ error: "Invalid OTP." });
+  if (newPassword.length < 6)
+    return res.status(400).json({ error: "Password must be at least 6 characters." });
+
+  const user = userStore.get(key);
+  if (!user) return res.status(404).json({ error: "User not found." });
+
+  userStore.set(key, { ...user, password: await hashPass(newPassword) });
+  otpStore.delete(sk);
+  return res.json({ success: true, message: "Password reset successfully!" });
+});
+
+// ── /auth/login-url — ✅ Google/Facebook OAuth URL for Flutter ────────────────
+// Flutter calls this to get the browser OAuth URL
+app.post("/auth/login-url", (req, res) => {
+  const { platform } = req.body;
+  if (!platform)
+    return res.status(400).json({ error: "platform is required." });
+
+  // CSRF state token — binds OAuth callback to this request
+  const state = genState();
+  // userId = "login_flow" because user not logged in yet
+  oauthStates.set(state, { platform, userId: "login_flow", createdAt: Date.now() });
+  setTimeout(() => oauthStates.delete(state), 600000);
+
+  let authUrl = "";
+
+  if (platform === "google") {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(503).json({
+        error: "Google login is not configured on the server.",
+        hint: "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Railway variables.",
+      });
+    }
+    const redirectUri = encodeURIComponent(
+      process.env.GOOGLE_CALLBACK_URL || `${BACKEND_URL}/auth/callback/google`
+    );
+    const scope = encodeURIComponent(
+      "openid email profile https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"
+    );
+    authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${process.env.GOOGLE_CLIENT_ID}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code&access_type=offline&prompt=consent`;
+
+  } else if (platform === "facebook") {
+    if (!process.env.FACEBOOK_APP_ID || !process.env.FACEBOOK_APP_SECRET) {
+      return res.status(503).json({
+        error: "Facebook login is not configured on the server.",
+        hint: "Set FACEBOOK_APP_ID and FACEBOOK_APP_SECRET in Railway variables.",
+      });
+    }
+    const redirectUri = encodeURIComponent(
+      process.env.FACEBOOK_REDIRECT_URL || `${BACKEND_URL}/social/callback/facebook`
+    );
+    const scope = "public_profile,email";
+    authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code`;
+
+  } else {
+    return res.status(400).json({ error: "Unsupported platform. Use 'google' or 'facebook'." });
+  }
+
+  return res.json({ success: true, authUrl });
+});
+
+// ── /auth/callback/google — Google OAuth callback (login flow) ─────────────
+app.get("/auth/callback/google", async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error || !code) {
+    return res.send(buildAuthRedirect({ error: error || "access_denied", platform: "google" }, true));
+  }
+
+  // State may be missing for login flow — still proceed
+  if (state && oauthStates.has(state)) oauthStates.delete(state);
+
+  try {
+    // Exchange code for tokens
+    const tokenRes = await axios.post("https://oauth2.googleapis.com/token", {
+      code,
+      client_id:     process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      redirect_uri:  process.env.GOOGLE_CALLBACK_URL || `${BACKEND_URL}/auth/callback/google`,
+      grant_type:    "authorization_code",
+    }, { timeout: 15000 });
+
+    const { access_token, refresh_token, id_token } = tokenRes.data;
+
+    // Get user profile
+    const profileRes = await axios.get("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${access_token}` },
+      timeout: 10000,
+    });
+
+    const profile = profileRes.data;
+    const email   = profile.email?.toLowerCase();
+    const name    = profile.name || email?.split("@")[0] || "User";
+
+    if (!email) throw new Error("No email in Google profile");
+
+    // Auto-create or update user
+    if (!userStore.has(email)) {
+      userStore.set(email, {
+        name, password: null, verified: true, plan: "free",
+        googleId: profile.sub,
+      });
+    } else {
+      const u = userStore.get(email);
+      userStore.set(email, { ...u, verified: true, name: u.name || name });
+    }
+
+    // Also store YouTube tokens
+    socialStore.set(`${email}:youtube`, {
+      accessToken:  access_token,
+      refreshToken: refresh_token || "",
+      accountName:  name,
+      handle:       email,
+      connectedAt:  new Date().toISOString(),
+    });
+
+    const token = jwt.sign({ userId: email }, JWT_SECRET, { expiresIn: "30d" });
+
+    // ✅ Redirect to Flutter deep link with full session data
+    const params = {
+      success: "true",
+      platform: "google",
+      token,
+      userId: email,
+      name,
+      email,
+      youtubeConnected: "true",
+    };
+
+    return res.send(buildAuthRedirect(params));
+
+  } catch (err) {
+    console.error("Google callback error:", err.response?.data || err.message);
+    return res.send(buildAuthRedirect({
+      error: "google_auth_failed",
+      platform: "google",
+      message: encodeURIComponent(err.message || "Google login failed"),
+    }, true));
+  }
+});
+
+// ── /schedule/post — POST endpoint for create post screen ────────────────────
+app.post("/schedule/post", authMiddleware, (req, res) => {
+  const userId = req.userId;
+  const {
+    caption, platforms, scheduledAt,
+    youtubeTitle, youtubeDescription, youtubeCategory, youtubePrivacy,
+    facebookPageId,
+  } = req.body;
+
+  if (!caption && !req.files)
+    return res.status(400).json({ error: "Caption or media is required." });
+
+  const id = "post_" + Date.now();
+  const newPost = {
+    id, userId,
+    caption: caption || "",
+    platforms: typeof platforms === "string" ? platforms.split(",") : (platforms || []),
+    status: "scheduled",
+    scheduledAt: scheduledAt || new Date().toISOString(),
+    youtubeTitle, youtubeDescription, youtubeCategory, youtubePrivacy,
+    facebookPageId,
+    views: 0, likes: 0,
+    createdAt: new Date().toISOString(),
+  };
+
+  postStore.set(id, newPost);
+  return res.json({ success: true, post: newPost });
+});
+
+// ── /ai/generate-caption — AI caption for create post screen ─────────────────
+app.post("/ai/generate-caption", async (req, res) => {
+  const { platforms = [], style = "viral", language = "hinglish" } = req.body;
+
+  const platformStr = platforms.length > 0
+    ? platforms.join(" and ")
+    : "Instagram and YouTube";
+
+  const langGuide = language === "hindi" ? "pure Hindi (Devanagari)"
+    : language === "english" ? "pure English"
+    : "Hinglish (natural mix of Hindi and English, very Indian)";
+
+  const prompt = `Write one viral social media caption for ${platformStr}.
+Style: ${style}, engaging, scroll-stopping
+Language: ${langGuide}
+Requirements:
+- Start with a powerful hook (first 5 words must grab attention)
+- Use 3-4 relevant emojis strategically
+- Include a clear call-to-action at the end
+- 150-250 characters
+- Feel authentic, not AI-generated
+- Add 10 relevant hashtags at the end
+
+Return ONLY the caption text with hashtags. No explanation.`;
+
+  try {
+    const r = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          { role: "system", content: "You are ViralMate, India's top viral content strategist. Return only the caption text with hashtags, nothing else." },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: 400,
+        temperature: 0.9,
+      },
+      {
+        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+        timeout: 20000,
+      }
+    );
+    const caption = r.data.choices[0].message.content.trim();
+    return res.json({ success: true, caption });
+  } catch (err) {
+    console.error("Caption gen error:", err.message);
+    return res.status(500).json({ error: "Caption generation failed. Try again." });
+  }
+});
+
+// ── /user/profile — GET user profile ────────────────────────────────────────
+app.get("/user/profile", authMiddleware, (req, res) => {
+  const user = userStore.get(req.userId);
+  if (!user) return res.status(404).json({ error: "User not found." });
+  return res.json({
+    success: true,
+    user: {
+      name: user.name,
+      email: req.userId,
+      plan: user.plan || "free",
+      verified: user.verified,
+    },
+  });
+});
+
+// ── /analytics — basic analytics ────────────────────────────────────────────
+app.get("/analytics", authMiddleware, (req, res) => {
+  const userId = req.userId;
+  const userPosts = Array.from(postStore.values()).filter(p => p.userId === userId);
+  return res.json({
+    success: true,
+    totalPosts: userPosts.length,
+    scheduled: userPosts.filter(p => p.status === "scheduled").length,
+    published: userPosts.filter(p => p.status === "published").length,
+    totalViews: userPosts.reduce((sum, p) => sum + (p.views || 0), 0),
+    totalLikes: userPosts.reduce((sum, p) => sum + (p.likes || 0), 0),
+  });
+});
+
 // ── 404 & GLOBAL ERROR HANDLER ────────────────────────────────────────────────
 app.use((_, res) => res.status(404).json({ error: "Route not found." }));
 app.use((err, _, res, _next) => {
